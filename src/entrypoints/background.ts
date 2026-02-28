@@ -243,9 +243,18 @@ export default defineBackground(() => {
     setTimeout(pollClipboard, 500);
   }
 
-  // Listen for messages from popup
+  // Listen for messages from popup (extension pages only — not content scripts)
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Security: only accept privileged messages from extension pages (popup/options),
+    // never from content scripts on web pages. Extension pages have no sender.tab.
+    if (sender.tab !== undefined) return false;
+    if (sender.id !== chrome.runtime.id) return false;
+
     if (message.type === 'COPY_TO_CLIPBOARD') {
+      if (typeof message.text !== 'string') {
+        sendResponse({ success: false, error: 'Invalid text' });
+        return false;
+      }
       ensureOffscreen().then(() => {
         sendToOffscreen({ type: 'WRITE_CLIPBOARD', text: message.text }).then(
           (response) => {

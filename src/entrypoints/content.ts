@@ -96,16 +96,34 @@ export default defineContentScript({
       const container = document.createElement('div');
       container.className = 'cf-toast';
 
-      // Checkmark icon (inline SVG)
-      container.innerHTML = `
-        <svg class="cf-icon" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        <span class="cf-text">
-          <span class="cf-label">Copied</span>
-          ${escapeHtml(truncate(text, 40))}
-        </span>
-      `;
+      // Build DOM programmatically — never use innerHTML with user content
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('class', 'cf-icon');
+      icon.setAttribute('viewBox', '0 0 24 24');
+      icon.setAttribute('fill', 'none');
+      icon.setAttribute('stroke', '#4ade80');
+      icon.setAttribute('stroke-width', '2.5');
+      icon.setAttribute('stroke-linecap', 'round');
+      icon.setAttribute('stroke-linejoin', 'round');
+      const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      poly.setAttribute('points', '20 6 9 17 4 12');
+      icon.appendChild(poly);
+
+      const textSpan = document.createElement('span');
+      textSpan.className = 'cf-text';
+
+      const label = document.createElement('span');
+      label.className = 'cf-label';
+      label.textContent = 'Copied';
+
+      // Safe: textContent never interprets HTML
+      const clipText = document.createTextNode(truncate(text, 40));
+
+      textSpan.appendChild(label);
+      textSpan.appendChild(clipText);
+
+      container.appendChild(icon);
+      container.appendChild(textSpan);
 
       shadow.appendChild(style);
       shadow.appendChild(container);
@@ -127,12 +145,6 @@ export default defineContentScript({
       return clean.slice(0, max) + '…';
     }
 
-    function escapeHtml(str: string): string {
-      const div = document.createElement('div');
-      div.textContent = str;
-      return div.innerHTML;
-    }
-
     // Listen for native copy events
     document.addEventListener('copy', () => {
       const selection = window.getSelection()?.toString();
@@ -142,8 +154,17 @@ export default defineContentScript({
     });
 
     // Listen for paste messages from background (context menu)
-    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      // Security: only accept messages from our own extension's background worker
+      // (background has no sender.tab, content scripts do)
+      if (sender.id !== chrome.runtime.id) return false;
+      if (sender.tab !== undefined) return false;
+
       if (message.type === 'COPYFLOW_INSERT_TEXT') {
+        if (typeof message.text !== 'string') {
+          sendResponse({ success: false, error: 'Invalid text' });
+          return false;
+        }
         const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement;
         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
           const start = el.selectionStart ?? el.value.length;

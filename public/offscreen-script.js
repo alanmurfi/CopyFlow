@@ -6,13 +6,20 @@
 // because the Clipboard API requires document focus, which offscreen
 // documents don't have.
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Security: only accept messages from our own extension
+  if (sender.id !== chrome.runtime.id) return false;
+
   if (message.type === 'READ_CLIPBOARD') {
     handleReadClipboard(sendResponse);
     return true;
   }
 
   if (message.type === 'WRITE_CLIPBOARD') {
+    if (typeof message.text !== 'string') {
+      sendResponse({ success: false, error: 'Invalid text' });
+      return false;
+    }
     handleWriteClipboard(message.text, sendResponse);
     return true;
   }

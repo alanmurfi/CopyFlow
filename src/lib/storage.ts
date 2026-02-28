@@ -11,6 +11,10 @@ const STORAGE_KEYS = {
   lastClipboard: 'copyflow_last_clipboard',
 } as const;
 
+// --- Constants ---
+
+const MAX_ENTRY_SIZE_BYTES = 500 * 1024; // 500 KB per entry
+
 // --- Entries ---
 
 export async function getEntries(): Promise<ClipboardEntry[]> {
@@ -19,6 +23,12 @@ export async function getEntries(): Promise<ClipboardEntry[]> {
 }
 
 export async function addEntry(entry: ClipboardEntry): Promise<void> {
+  // Reject oversized entries
+  if (entry.content && entry.content.length > MAX_ENTRY_SIZE_BYTES) {
+    console.debug('CopyFlow: Entry too large, skipping');
+    return;
+  }
+
   const entries = await getEntries();
 
   // Deduplicate: don't add if same content as most recent
@@ -31,7 +41,7 @@ export async function addEntry(entry: ClipboardEntry): Promise<void> {
 
   // Enforce max entries limit
   const settings = await getSettings();
-  const maxEntries = settings.maxEntries || 500;
+  const maxEntries = Math.max(settings.maxEntries || 500, 1); // floor at 1 to prevent loop
   while (entries.length > maxEntries) {
     // Remove oldest unpinned entry
     const lastUnpinnedIndex = entries.findLastIndex((e) => !e.pinned);
@@ -43,7 +53,11 @@ export async function addEntry(entry: ClipboardEntry): Promise<void> {
     }
   }
 
-  await chrome.storage.local.set({ [STORAGE_KEYS.entries]: entries });
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEYS.entries]: entries });
+  } catch (err) {
+    console.error('CopyFlow: Storage write failed (quota?):', err);
+  }
 }
 
 export async function deleteEntry(id: string): Promise<void> {
@@ -137,23 +151,66 @@ export async function exportData(): Promise<string> {
   return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), entries, folders, settings }, null, 2);
 }
 
+// Validate a single imported entry against expected schema
+function isValidEntry(e: unknown): e is ClipboardEntry {
+  if (typeof e !== 'object' || e === null) return false;
+  const entry = e as Record<string, unknown>;
+  return (
+    typeof entry.id === 'string' && entry.id.length > 0 && entry.id.length < 200 &&
+    typeof entry.content === 'string' && entry.content.length <= MAX_ENTRY_SIZE_BYTES &&
+    (entry.type === 'text' || entry.type === 'image') &&
+    typeof entry.timestamp === 'number' && entry.timestamp > 0 &&
+    typeof entry.pinned === 'boolean' &&
+    (entry.imageDataUrl === undefined || entry.imageDataUrl === null ||
+      (typeof entry.imageDataUrl === 'string' && entry.imageDataUrl.startsWith('data:image/'))) &&
+    (entry.sourceUrl === undefined || entry.sourceUrl === null || typeof entry.sourceUrl === 'string') &&
+    (entry.sourceTitle === undefined || entry.sourceTitle === null || typeof entry.sourceTitle === 'string')
+  );
+}
+
+// Validate imported settings — only allow known safe fields
+function sanitizeSettings(raw: unknown): Partial<Settings> {
+  if (typeof raw !== 'object' || raw === null) return {};
+  const s = raw as Record<string, unknown>;
+  const safe: Partial<Settings> = {};
+  if (s.theme === 'light' || s.theme === 'dark' || s.theme === 'system') safe.theme = s.theme;
+  if (typeof s.maxEntries === 'number' && s.maxEntries >= 1 && s.maxEntries <= 10000) safe.maxEntries = s.maxEntries;
+  if (typeof s.autoDeleteDays === 'number' && s.autoDeleteDays >= 0 && s.autoDeleteDays <= 365) safe.autoDeleteDays = s.autoDeleteDays;
+  if (typeof s.keyboardShortcutEnabled === 'boolean') safe.keyboardShortcutEnabled = s.keyboardShortcutEnabled;
+  return safe;
+}
+
 export async function importData(json: string): Promise<{ entriesImported: number }> {
   const data = JSON.parse(json);
   if (!data.entries || !Array.isArray(data.entries)) {
     throw new Error('Invalid CopyFlow backup file');
   }
 
+  // Validate each entry against schema — reject invalid ones
+  const validEntries = data.entries.filter(isValidEntry);
+
   // Merge: add imported entries that don't already exist (by content match)
   const existing = await getEntries();
   const existingContents = new Set(existing.map((e) => e.content));
-  const newEntries = data.entries.filter((e: ClipboardEntry) => !existingContents.has(e.content));
+  const newEntries = validEntries.filter((e) => !existingContents.has(e.content));
 
-  const merged = [...existing, ...newEntries];
-  await chrome.storage.local.set({ [STORAGE_KEYS.entries]: merged });
+  // Enforce max entries after merge
+  const settings = await getSettings();
+  const maxEntries = Math.max(settings.maxEntries || 500, 1);
+  const merged = [...existing, ...newEntries].slice(0, maxEntries);
 
-  // Import settings if present
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEYS.entries]: merged });
+  } catch (err) {
+    throw new Error('Import failed: storage quota exceeded');
+  }
+
+  // Import settings if present — sanitize each field
   if (data.settings) {
-    await updateSettings(data.settings);
+    const safe = sanitizeSettings(data.settings);
+    if (Object.keys(safe).length > 0) {
+      await updateSettings(safe);
+    }
   }
 
   return { entriesImported: newEntries.length };
