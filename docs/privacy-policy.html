@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CopyFlow — Privacy Policy</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.7;
+      color: #1a1a1a;
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 48px 24px;
+    }
+    h1 { font-size: 28px; margin-bottom: 8px; }
+    h2 { font-size: 20px; margin-top: 32px; margin-bottom: 12px; }
+    p, li { font-size: 15px; margin-bottom: 12px; }
+    ul { padding-left: 24px; }
+    .updated { color: #666; font-size: 14px; margin-bottom: 32px; }
+    a { color: #2563eb; }
+    .highlight {
+      background: #f0fdf4;
+      border-left: 3px solid #22c55e;
+      padding: 16px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+    }
+    footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid #e5e5e5; color: #666; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>CopyFlow Privacy Policy</h1>
+  <p class="updated">Last updated: March 1, 2026</p>
+
+  <div class="highlight">
+    <strong>The short version:</strong> CopyFlow stores your clipboard history locally on your device. We do not collect, transmit, or sell any of your data. We have no servers. We have no analytics. We don't even have accounts.
+  </div>
+
+  <h2>What data CopyFlow stores</h2>
+  <p>CopyFlow saves the text you copy to your clipboard. Each saved clip includes:</p>
+  <ul>
+    <li>The copied text content</li>
+    <li>A timestamp of when it was copied</li>
+    <li>The title and URL of the page you copied from (for your reference only)</li>
+    <li>Whether you pinned or edited the clip</li>
+  </ul>
+  <p>All of this data is stored locally in your browser using Chrome's built-in storage API (<code>chrome.storage.local</code>). It never leaves your device.</p>
+
+  <h2>What data CopyFlow does NOT collect</h2>
+  <ul>
+    <li>No browsing history</li>
+    <li>No personal information (name, email, etc.)</li>
+    <li>No analytics or usage tracking</li>
+    <li>No cookies or fingerprinting</li>
+    <li>No data is sent to any server, anywhere</li>
+  </ul>
+
+  <h2>Permissions explained</h2>
+  <p>CopyFlow requests only the permissions it needs to function:</p>
+  <ul>
+    <li><strong>clipboardRead / clipboardWrite</strong> — Read your clipboard to save history, and write to it when you click a clip to copy it.</li>
+    <li><strong>storage</strong> — Save your clipboard history locally in your browser.</li>
+    <li><strong>offscreen</strong> — Chrome requires this to access the clipboard from a background process.</li>
+    <li><strong>activeTab / tabs</strong> — Detect which page you copied from, so CopyFlow can show the source next to each clip.</li>
+    <li><strong>contextMenus</strong> — Show your recent clips in the right-click menu for quick pasting.</li>
+    <li><strong>scripting</strong> — Insert text into form fields when you paste from the right-click menu.</li>
+  </ul>
+  <p>CopyFlow does <strong>not</strong> request access to your browsing history, bookmarks, downloads, or any data beyond what is listed above.</p>
+
+  <h2>Data export and deletion</h2>
+  <p>You can export all your data as a JSON file at any time using the export feature in CopyFlow's popup menu. You can also delete individual clips, or clear all clips at once. Uninstalling the extension permanently deletes all stored data.</p>
+
+  <h2>Third-party services</h2>
+  <p>CopyFlow does not use any third-party services, SDKs, analytics platforms, or advertising networks. There is no server-side component.</p>
+
+  <h2>Children's privacy</h2>
+  <p>CopyFlow does not knowingly collect any data from children under the age of 13.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>If this privacy policy changes, the updated version will be posted at this URL with a new "Last updated" date. Since CopyFlow has no way to contact users (we don't collect email addresses), we encourage you to check this page occasionally.</p>
+
+  <h2>Contact</h2>
+  <p>If you have questions about this privacy policy, you can reach the developer at:</p>
+  <p><strong>Email:</strong> copyflow.extension@gmail.com</p>
+
+  <footer>
+    <p>CopyFlow is an independent project built by a solo developer. It is not affiliated with Google or any other company.</p>
+  </footer>
+</body>
+</html>
