@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head><title>CopyFlow Icon Generator</title></head>
+<body>
+<canvas id="c16" width="16" height="16"></canvas>
+<canvas id="c48" width="48" height="48"></canvas>
+<canvas id="c128" width="128" height="128"></canvas>
+<script>
+// Generate CopyFlow icon at multiple sizes
+// Design: rounded square with clipboard + flow arrow
+
+function drawIcon(canvas) {
+  const ctx = canvas.getContext('2d');
+  const s = canvas.width;
+  const p = s * 0.08; // padding
+
+  // Background — rounded rectangle
+  const radius = s * 0.2;
+  ctx.beginPath();
+  ctx.roundRect(p, p, s - p*2, s - p*2, radius);
+  ctx.fillStyle = '#4C6EF5'; // Mantine blue
+  ctx.fill();
+
+  // Clipboard body (white)
+  const cbX = s * 0.25;
+  const cbY = s * 0.22;
+  const cbW = s * 0.5;
+  const cbH = s * 0.6;
+  const cbR = s * 0.06;
+  ctx.beginPath();
+  ctx.roundRect(cbX, cbY, cbW, cbH, cbR);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+
+  // Clipboard clip (top tab)
+  const tabW = s * 0.24;
+  const tabH = s * 0.1;
+  const tabX = s * 0.5 - tabW/2;
+  const tabY = cbY - tabH * 0.5;
+  ctx.beginPath();
+  ctx.roundRect(tabX, tabY, tabW, tabH, s * 0.03);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  // Inner clip
+  ctx.beginPath();
+  ctx.roundRect(tabX + tabW*0.15, tabY + tabH*0.2, tabW*0.7, tabH*0.6, s*0.02);
+  ctx.fillStyle = '#4C6EF5';
+  ctx.fill();
+
+  // Flow lines (3 horizontal lines on the clipboard)
+  ctx.fillStyle = '#4C6EF5';
+  ctx.globalAlpha = 0.3;
+  const lineY1 = cbY + cbH * 0.3;
+  const lineY2 = cbY + cbH * 0.5;
+  const lineY3 = cbY + cbH * 0.7;
+  const lineH = s * 0.04;
+  const lineX = cbX + cbW * 0.15;
+
+  ctx.beginPath();
+  ctx.roundRect(lineX, lineY1, cbW * 0.7, lineH, lineH/2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(lineX, lineY2, cbW * 0.5, lineH, lineH/2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(lineX, lineY3, cbW * 0.6, lineH, lineH/2);
+  ctx.fill();
+  ctx.globalAlpha = 1.0;
+
+  // Flow arrow (bottom right — small accent)
+  const arrowSize = s * 0.18;
+  const arrowX = s * 0.72;
+  const arrowY = s * 0.72;
+  ctx.beginPath();
+  ctx.arc(arrowX, arrowY, arrowSize, 0, Math.PI * 2);
+  ctx.fillStyle = '#37B24D'; // green accent
+  ctx.fill();
+
+  // Arrow shape inside circle
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = s * 0.03;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(arrowX - arrowSize*0.35, arrowY);
+  ctx.lineTo(arrowX + arrowSize*0.25, arrowY);
+  ctx.lineTo(arrowX + arrowSize*0.0, arrowY - arrowSize*0.3);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(arrowX + arrowSize*0.25, arrowY);
+  ctx.lineTo(arrowX + arrowSize*0.0, arrowY + arrowSize*0.3);
+  ctx.stroke();
+}
+
+drawIcon(document.getElementById('c16'));
+drawIcon(document.getElementById('c48'));
+drawIcon(document.getElementById('c128'));
+
+// Download helper
+function download(canvasId, filename) {
+  const canvas = document.getElementById(canvasId);
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+}
+
+document.write('<br><br>');
+document.write('<button onclick="download(\'c16\',\'icon-16.png\')">Download 16px</button> ');
+document.write('<button onclick="download(\'c48\',\'icon-48.png\')">Download 48px</button> ');
+document.write('<button onclick="download(\'c128\',\'icon-128.png\')">Download 128px</button> ');
+document.write('<button onclick="[\'c16\',\'c48\',\'c128\'].forEach((id,i)=>setTimeout(()=>download(id,`icon-${[16,48,128][i]}.png`),i*500))">Download All</button>');
+</script>
+</body>
+</html>
