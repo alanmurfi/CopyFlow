@@ -90,7 +90,7 @@ export interface FeatureFlags {
 }
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
-  snippetsEnabled: false,
+  snippetsEnabled: true,
 };
 
 // Message types for service worker <-> offscreen/popup communication
