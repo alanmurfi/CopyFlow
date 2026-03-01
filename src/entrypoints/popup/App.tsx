@@ -730,7 +730,7 @@ function MainContent({
             {storageInfo.totalEntries} clips · {formatBytes(storageInfo.bytesUsed)} used
           </Text>
           <Text size="xs" c="dimmed">
-            CopyFlow v0.1.0
+            CopyFlow v0.2.0
           </Text>
         </Group>
         {quotaExceeded && (

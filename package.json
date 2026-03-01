@@ -1,6 +1,6 @@
 {
   "name": "copyflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CopyFlow — Clipboard history manager for Chrome",
   "type": "module",
   "scripts": {

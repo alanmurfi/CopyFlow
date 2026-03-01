@@ -6,7 +6,7 @@ export default defineConfig({
   manifest: {
     name: 'CopyFlow — Clipboard Manager',
     description: 'Save everything you copy. Search, pin, and organise your clipboard history.',
-    version: '0.1.0',
+    version: '0.2.0',
     permissions: [
       'clipboardRead',
       'clipboardWrite',
