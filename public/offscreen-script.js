@@ -66,7 +66,8 @@ async function handleReadClipboard(sendResponse) {
 
     sendResponse({ success: true, type: null, content: null });
   } catch (_err) {
-    // Clipboard API unavailable — fall back to execCommand for text
+    // navigator.clipboard.read() requires focus — offscreen docs are never focused.
+    // Fall back to execCommand for text (works without focus).
     handleReadClipboardFallback(sendResponse);
   }
 }

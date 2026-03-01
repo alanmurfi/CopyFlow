@@ -392,6 +392,48 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (message.type === 'STORE_IMAGE_ENTRY') {
+      // Image captured by content script via navigator.clipboard.read() on copy event
+      (async () => {
+        try {
+          if (typeof message.dedupKey !== 'string' || typeof message.dataUrl !== 'string') {
+            sendResponse({ success: false });
+            return;
+          }
+
+          // Check if we've already seen this image
+          if (await isLastClipboard(message.dedupKey)) {
+            sendResponse({ success: true });
+            return;
+          }
+          await setLastClipboard(message.dedupKey);
+
+          const tab = sender.tab;
+          const url = tab?.url ?? '';
+          const isWebUrl = (u: string) => u.startsWith('https://') || u.startsWith('http://');
+
+          const entry: ClipboardEntry = {
+            id: uuidv4(),
+            content: message.dedupKey,
+            type: 'image',
+            imageDataUrl: message.dataUrl,
+            timestamp: Date.now(),
+            sourceUrl: isWebUrl(url) ? url : undefined,
+            sourceTitle: isWebUrl(url) ? tab?.title : undefined,
+            pinned: false,
+          };
+
+          await addEntry(entry);
+          resetAutoLockTimer();
+          sendResponse({ success: true });
+        } catch (err) {
+          console.debug('CopyFlow: STORE_IMAGE_ENTRY error:', err);
+          sendResponse({ success: false });
+        }
+      })();
+      return true;
+    }
+
     return false;
   });
 

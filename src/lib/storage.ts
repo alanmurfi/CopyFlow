@@ -18,7 +18,8 @@ const STORAGE_KEYS = {
 
 // --- Constants ---
 
-const MAX_ENTRY_SIZE_BYTES = 500 * 1024; // 500 KB per entry
+const MAX_TEXT_SIZE_BYTES = 500 * 1024;   // 500 KB per text entry
+const MAX_IMAGE_SIZE_BYTES = 3 * 1024 * 1024; // 3 MB per image entry
 
 export const STORAGE_QUOTA_BYTES = 5_242_880; // 5 MB chrome.storage.local limit
 export const STORAGE_QUOTA_WARN_THRESHOLD = 0.8; // Warn at 80% usage
@@ -152,12 +153,13 @@ export async function getEntries(): Promise<ClipboardEntry[]> {
 
 export function addEntry(entry: ClipboardEntry): Promise<void> {
   return withEntryLock(async () => {
-    // Reject oversized entries — for images check imageDataUrl size, not the short dedup key
+    // Reject oversized entries — images use a higher limit than text
+    const limit = entry.type === 'image' ? MAX_IMAGE_SIZE_BYTES : MAX_TEXT_SIZE_BYTES;
     const sizeToCheck = entry.type === 'image' && entry.imageDataUrl
       ? entry.imageDataUrl.length
       : entry.content.length;
-    if (sizeToCheck > MAX_ENTRY_SIZE_BYTES) {
-      console.debug('CopyFlow: Entry too large, skipping');
+    if (sizeToCheck > limit) {
+      console.error('CopyFlow: Entry too large, skipping. size=' + sizeToCheck + ' limit=' + limit);
       return;
     }
 
@@ -387,7 +389,7 @@ function isValidEntry(e: unknown): e is ClipboardEntry {
   const entry = e as Record<string, unknown>;
   return (
     typeof entry.id === 'string' && entry.id.length > 0 && entry.id.length < 200 &&
-    typeof entry.content === 'string' && entry.content.length <= MAX_ENTRY_SIZE_BYTES &&
+    typeof entry.content === 'string' && entry.content.length <= MAX_TEXT_SIZE_BYTES &&
     (entry.type === 'text' || entry.type === 'image') &&
     typeof entry.timestamp === 'number' && entry.timestamp > 0 &&
     typeof entry.pinned === 'boolean' &&

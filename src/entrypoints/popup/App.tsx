@@ -38,6 +38,7 @@ import {
 } from '@tabler/icons-react';
 import {
   getEntries,
+  addEntry,
   deleteEntry,
   updateEntry,
   clearAllEntries,
@@ -49,6 +50,7 @@ import {
   STORAGE_QUOTA_BYTES,
   STORAGE_QUOTA_WARN_THRESHOLD,
 } from '../../lib/storage';
+import { v4 as uuidv4 } from 'uuid';
 import { isUnlocked } from '../../lib/session';
 import { getFeatureFlags } from '../../lib/features';
 import type { ClipboardEntry, Folder, Settings, FeatureFlags } from '../../types';
@@ -114,6 +116,64 @@ export default function App() {
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
+  }, [isLocked]);
+
+  // Poll clipboard for images while popup is open.
+  // The popup is focused, so navigator.clipboard.read() works here — unlike the offscreen doc.
+  useEffect(() => {
+    if (isLocked !== false) return;
+
+    let lastKey = '';
+    let initialized = false;
+
+    async function pollForImages() {
+      try {
+        // On first run, load existing image entries to avoid re-storing what's already saved
+        if (!initialized) {
+          const existing = await getEntries();
+          const lastImage = existing.find((e) => e.type === 'image');
+          lastKey = lastImage?.content ?? '';
+          initialized = true;
+        }
+
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+            .find((t) => item.types.includes(t));
+          if (!imageType) continue;
+
+          const blob = await item.getType(imageType);
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = () => reject(new Error('FileReader failed'));
+            reader.readAsDataURL(blob);
+          });
+
+          const b64Start = dataUrl.indexOf(',') + 1;
+          const key = '[image:' + dataUrl.slice(b64Start, b64Start + 40) + ']';
+
+          if (key === lastKey) return;
+          lastKey = key;
+
+          await addEntry({
+            id: uuidv4(),
+            content: key,
+            type: 'image',
+            imageDataUrl: dataUrl,
+            timestamp: Date.now(),
+            pinned: false,
+          });
+          // addEntry writes to storage → chrome.storage.onChanged fires → loadEntries() updates UI
+          return;
+        }
+      } catch {
+        // clipboard.read() unavailable or threw — ignore
+      }
+    }
+
+    const id = setInterval(pollForImages, 2000);
+    return () => clearInterval(id);
   }, [isLocked]);
 
   async function checkLockState() {

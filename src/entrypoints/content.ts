@@ -150,13 +150,55 @@ export default defineContentScript({
       return clean.slice(0, max) + '\u2026';
     }
 
-    // Listen for native copy events
+    // Listen for native copy events (text)
     document.addEventListener('copy', () => {
       const selection = window.getSelection()?.toString();
       if (selection && selection.trim().length > 0) {
         showToast(selection.trim());
       }
     });
+
+    // ==========================================
+    // Image clipboard polling
+    // ==========================================
+    // navigator.clipboard.read() requires document focus — offscreen docs never have it.
+    // Content scripts run in real pages that ARE focused when the user is interacting.
+    // Poll every 2s (only when focused) to capture images copied via right-click → Copy Image.
+
+    let lastImageDedupKey = '';
+
+    async function pollImageClipboard(): Promise<void> {
+      if (!document.hasFocus()) return;
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+            .find((t) => item.types.includes(t));
+          if (!imageType) continue;
+
+          const blob = await item.getType(imageType);
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = () => reject(new Error('FileReader failed'));
+            reader.readAsDataURL(blob);
+          });
+
+          const b64Start = dataUrl.indexOf(',') + 1;
+          const dedupKey = '[image:' + dataUrl.slice(b64Start, b64Start + 40) + ']';
+
+          if (dedupKey === lastImageDedupKey) return; // already sent this one
+          lastImageDedupKey = dedupKey;
+
+          chrome.runtime.sendMessage({ type: 'STORE_IMAGE_ENTRY', dedupKey, dataUrl });
+          return;
+        }
+      } catch {
+        // Not focused, permission denied, or no clipboard API — ignore
+      }
+    }
+
+    setInterval(pollImageClipboard, 2000);
 
     // ==========================================
     // 2. Message handler (paste + snippet updates)
