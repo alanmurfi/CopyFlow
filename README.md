@@ -1,6 +1,6 @@
 # 📋 CopyFlow — Clipboard History Manager
 
-A privacy-first Chrome extension that saves everything you copy. Search, pin, edit, and export your clipboard history.
+A privacy-first Chrome extension that saves everything you copy. Search, pin, edit, and export your clipboard history — with optional AES-256 encryption.
 
 **[Install from Chrome Web Store](#)** · **[Landing Page](https://alanmurfi.github.io/CopyFlow/)** · **[Privacy Policy](https://alanmurfi.github.io/CopyFlow/privacy-policy.html)**
 
@@ -14,6 +14,7 @@ Most clipboard managers ask for permissions they don't need — browsing history
 - **No data sent to any server**
 - **No account required**
 - **All data stored locally**
+- **Optional AES-256 encryption**
 - **Export your data anytime**
 
 ## Features
@@ -27,6 +28,10 @@ Most clipboard managers ask for permissions they don't need — browsing history
 | **Right-click paste** | Paste from your history via the context menu |
 | **Copy toast** | Visual confirmation on screen every time you copy |
 | **Export / Import** | Back up your clips as JSON, restore on any machine |
+| **AES-256 encryption** | Optional password-based encryption with PBKDF2 key derivation |
+| **Auto-lock** | Automatically lock encrypted history after a configurable inactivity period |
+| **Text snippets** | Create shortcuts that expand to full snippets when typed |
+| **Storage monitoring** | Footer warning when storage approaches the 5 MB limit |
 | **Auto-cleanup** | Old unpinned clips are removed after 30 days |
 | **Dark mode** | Toggle between light and dark themes |
 | **Keyboard shortcut** | Alt+Shift+V opens CopyFlow instantly |
@@ -36,6 +41,7 @@ Most clipboard managers ask for permissions they don't need — browsing history
 - [WXT](https://wxt.dev/) — Vite-based Chrome extension framework
 - [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
 - [Mantine](https://mantine.dev/) — UI component library
+- [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API) — AES-256-GCM, PBKDF2-SHA256
 - Chrome Manifest V3
 
 ## Development
@@ -50,6 +56,9 @@ pnpm dev
 # Build for production
 pnpm build
 
+# Run unit tests
+pnpm test
+
 # Production zip is at .output/copyflow-0.1.0-chrome.zip
 ```
 
@@ -58,21 +67,29 @@ pnpm build
 ```
 src/
 ├── entrypoints/
-│   ├── background.ts      # Service worker — clipboard polling, context menus, auto-cleanup
-│   ├── content.ts          # Content script — copy toast notification
+│   ├── background.ts           # Service worker — clipboard polling, context menus, auto-lock
+│   ├── content.ts              # Content script — copy toast notification
 │   └── popup/
-│       ├── App.tsx          # Main popup UI
+│       ├── App.tsx             # Main popup UI
+│       ├── LockScreen.tsx      # Password entry with rate limiting
+│       ├── PasswordSettings.tsx # Encryption management
+│       ├── SnippetEditor.tsx   # Snippet create/edit form
+│       ├── SnippetsPanel.tsx   # Snippets management panel
 │       ├── index.html
 │       ├── main.tsx
 │       └── style.css
 ├── lib/
-│   └── storage.ts          # Chrome storage wrapper (entries, settings, export/import)
+│   ├── crypto.ts               # AES-256-GCM + PBKDF2 primitives
+│   ├── features.ts             # Feature flags
+│   ├── session.ts              # Session key management (chrome.storage.session)
+│   ├── snippets.ts             # Text snippets storage
+│   └── storage.ts              # Chrome storage wrapper (entries, settings, export/import)
 └── types/
-    └── index.ts             # TypeScript interfaces
+    └── index.ts                # TypeScript interfaces
 public/
-├── offscreen.html           # Offscreen document for clipboard API access
-├── offscreen-script.js      # Clipboard read/write via execCommand
-└── icon/                    # Extension icons
+├── offscreen.html              # Offscreen document for clipboard API access
+├── offscreen-script.js         # Clipboard read/write via execCommand
+└── icon/                       # Extension icons
 ```
 
 ## How It Works
@@ -80,8 +97,9 @@ public/
 1. A **service worker** polls the clipboard every 1.5s via an **offscreen document** (required because MV3 service workers can't access the Clipboard API directly)
 2. The offscreen document uses `document.execCommand('paste')` with a hidden textarea to read clipboard contents
 3. New clips are deduplicated and stored in `chrome.storage.local`
-4. A **content script** listens for native `copy` events and shows a toast notification
-5. The **popup** reads from storage and updates in real-time via `chrome.storage.onChanged`
+4. When encryption is enabled, each entry is AES-256-GCM encrypted before storage; the session key is kept in `chrome.storage.session` (cleared when the browser closes)
+5. A **content script** listens for native `copy` events and shows a toast notification
+6. The **popup** reads from storage and updates in real-time via `chrome.storage.onChanged`
 
 ## Permissions Explained
 
@@ -92,7 +110,6 @@ public/
 | `offscreen` | Chrome requires this for background clipboard access |
 | `activeTab` / `tabs` | Detect which page you copied from |
 | `contextMenus` | Right-click paste menu |
-| `scripting` | Insert text into form fields from context menu |
 
 ## License
 

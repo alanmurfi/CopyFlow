@@ -48,6 +48,16 @@
   </ul>
   <p>All of this data is stored locally in your browser using Chrome's built-in storage API (<code>chrome.storage.local</code>). It never leaves your device.</p>
 
+  <h2>Optional encryption</h2>
+  <p>CopyFlow includes an optional password-based encryption feature. When enabled:</p>
+  <ul>
+    <li>All clipboard entries are encrypted on your device using AES-256-GCM before being saved to storage.</li>
+    <li>The encryption key is derived from your password using PBKDF2-SHA256 (600,000 iterations). Your password is never stored.</li>
+    <li>The derived key is kept in <code>chrome.storage.session</code> while the browser is open, and cleared automatically when the browser closes.</li>
+    <li>Without your password, the encrypted data cannot be read — not even by CopyFlow developers (we have no servers or access to your device).</li>
+  </ul>
+  <p>Encryption is entirely optional. If you don't set a password, your clips are stored in plaintext locally, exactly as in v0.1.0.</p>
+
   <h2>What data CopyFlow does NOT collect</h2>
   <ul>
     <li>No browsing history</li>
@@ -65,7 +75,6 @@
     <li><strong>offscreen</strong> — Chrome requires this to access the clipboard from a background process.</li>
     <li><strong>activeTab / tabs</strong> — Detect which page you copied from, so CopyFlow can show the source next to each clip.</li>
     <li><strong>contextMenus</strong> — Show your recent clips in the right-click menu for quick pasting.</li>
-    <li><strong>scripting</strong> — Insert text into form fields when you paste from the right-click menu.</li>
   </ul>
   <p>CopyFlow does <strong>not</strong> request access to your browsing history, bookmarks, downloads, or any data beyond what is listed above.</p>
 
