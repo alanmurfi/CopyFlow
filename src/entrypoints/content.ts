@@ -176,6 +176,15 @@ export default defineContentScript({
         sendResponse({ success: true });
       }
 
+      if (message.type === 'COPYFLOW_TRIGGER_PASTE') {
+        // The background has already written the clip text to the system clipboard.
+        // execCommand('paste') fires a native paste event that works with all input
+        // types and frameworks (React, Vue, contentEditable, etc.) without needing
+        // a user gesture when the extension has clipboardRead permission.
+        document.execCommand('paste');
+        sendResponse({ success: true });
+      }
+
       if (message.type === 'COPYFLOW_SNIPPETS_UPDATED') {
         loadSnippetShortcuts();
         sendResponse({ success: true });

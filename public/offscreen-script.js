@@ -40,11 +40,15 @@ async function handleReadClipboard(sendResponse) {
       if (imageType) {
         const blob = await item.getType(imageType);
         const dataUrl = await blobToDataUrl(blob);
+        // Use a short prefix of the base64 payload as the dedup key —
+        // storing the full data URL in content would hit the 500 KB size limit.
+        const b64Start = dataUrl.indexOf(',') + 1;
+        const dedupKey = '[image:' + dataUrl.slice(b64Start, b64Start + 40) + ']';
         sendResponse({
           success: true,
           type: 'image',
-          content: dataUrl,      // used for dedup
-          imageDataUrl: dataUrl, // used for display
+          content: dedupKey,     // short identifier for dedup
+          imageDataUrl: dataUrl, // full data URL for display
         });
         return;
       }

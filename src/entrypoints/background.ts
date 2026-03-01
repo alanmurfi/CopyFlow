@@ -179,7 +179,9 @@ export default defineBackground(() => {
       }
 
       const entries = await getEntries();
-      if (entries.length === 0) return;
+      // Only text entries can be pasted via context menu
+      const textEntries = entries.filter((e) => e.type === 'text');
+      if (textEntries.length === 0) return;
 
       // Parent menu
       chrome.contextMenus.create({
@@ -189,8 +191,8 @@ export default defineBackground(() => {
       });
 
       // Add pinned first, then recent
-      const pinned = entries.filter((e) => e.pinned);
-      const unpinned = entries.filter((e) => !e.pinned);
+      const pinned = textEntries.filter((e) => e.pinned);
+      const unpinned = textEntries.filter((e) => !e.pinned);
 
       let count = 0;
 
@@ -254,10 +256,19 @@ export default defineBackground(() => {
         return;
       }
 
-      // Insert text into the focused field via content script
+      // Image entries can't be pasted as text
+      if (entry.type === 'image') return;
+
+      // Write text to clipboard first, then trigger native paste in the page.
+      // This works with all element types (input, textarea, contentEditable)
+      // and all frameworks (React, Vue, Angular, etc.) via the browser's native
+      // paste event — direct DOM insertion fails on contentEditable without a
+      // user gesture.
+      await ensureOffscreen();
+      await sendToOffscreen({ type: 'WRITE_CLIPBOARD', text: entry.content });
+
       chrome.tabs.sendMessage(tab.id, {
-        type: 'COPYFLOW_INSERT_TEXT',
-        text: entry.content,
+        type: 'COPYFLOW_TRIGGER_PASTE',
       }).catch(() => {
         console.debug('CopyFlow: Content script not available on this tab');
       });

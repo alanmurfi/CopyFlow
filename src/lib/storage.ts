@@ -152,8 +152,11 @@ export async function getEntries(): Promise<ClipboardEntry[]> {
 
 export function addEntry(entry: ClipboardEntry): Promise<void> {
   return withEntryLock(async () => {
-    // Reject oversized entries
-    if (entry.content && entry.content.length > MAX_ENTRY_SIZE_BYTES) {
+    // Reject oversized entries — for images check imageDataUrl size, not the short dedup key
+    const sizeToCheck = entry.type === 'image' && entry.imageDataUrl
+      ? entry.imageDataUrl.length
+      : entry.content.length;
+    if (sizeToCheck > MAX_ENTRY_SIZE_BYTES) {
       console.debug('CopyFlow: Entry too large, skipping');
       return;
     }
