@@ -34,6 +34,7 @@ import {
   IconDots,
   IconLock,
   IconShieldLock,
+  IconFolder,
 } from '@tabler/icons-react';
 import {
   getEntries,
@@ -44,17 +45,19 @@ import {
   exportData,
   importData,
   getSettings,
+  getFolders,
   STORAGE_QUOTA_BYTES,
   STORAGE_QUOTA_WARN_THRESHOLD,
 } from '../../lib/storage';
 import { isUnlocked } from '../../lib/session';
 import { getFeatureFlags } from '../../lib/features';
-import type { ClipboardEntry, Settings, FeatureFlags } from '../../types';
+import type { ClipboardEntry, Folder, Settings, FeatureFlags } from '../../types';
 import LockScreen from './LockScreen';
 import PasswordSettings from './PasswordSettings';
 import SnippetsPanel from './SnippetsPanel';
+import FolderManager from './FolderManager';
 
-type View = 'main' | 'passwordSettings';
+type View = 'main' | 'passwordSettings' | 'folderManager';
 type Tab = 'clips' | 'snippets';
 
 export default function App() {
@@ -64,6 +67,8 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [featureFlags, setFeatureFlags] = useState<FeatureFlags | null>(null);
   const [entries, setEntries] = useState<ClipboardEntry[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [storageInfo, setStorageInfo] = useState({ bytesUsed: 0, totalEntries: 0 });
@@ -86,6 +91,7 @@ export default function App() {
   useEffect(() => {
     if (isLocked === false) {
       loadEntries();
+      loadFolders();
       loadStorageInfo();
     }
   }, [isLocked]);
@@ -97,6 +103,9 @@ export default function App() {
         // When encrypted, newValue is ciphertext — must go through getEntries() to decrypt
         loadEntries();
         loadStorageInfo();
+      }
+      if (changes['copyflow_folders'] && isLocked === false) {
+        loadFolders();
       }
       if (changes['copyflow_quota_exceeded']?.newValue) {
         setQuotaExceeded(true);
@@ -122,6 +131,11 @@ export default function App() {
   async function loadEntries() {
     const data = await getEntries();
     setEntries(data);
+  }
+
+  async function loadFolders() {
+    const data = await getFolders();
+    setFolders(data);
   }
 
   async function loadStorageInfo() {
@@ -181,10 +195,24 @@ export default function App() {
     );
   }
 
+  // --- Folder manager view ---
+  if (view === 'folderManager') {
+    return (
+      <FolderManager
+        folders={folders}
+        onClose={() => setView('main')}
+        onFoldersChange={loadFolders}
+      />
+    );
+  }
+
   // --- Main content ---
   return (
     <MainContent
       entries={entries}
+      folders={folders}
+      activeFolderId={activeFolderId}
+      setActiveFolderId={setActiveFolderId}
       search={search}
       setSearch={setSearch}
       copiedId={copiedId}
@@ -199,6 +227,7 @@ export default function App() {
       onTabChange={setTab}
       onLock={handleLock}
       onOpenPasswordSettings={() => setView('passwordSettings')}
+      onOpenFolderManager={() => setView('folderManager')}
       loadEntries={loadEntries}
     />
   );
@@ -208,6 +237,9 @@ export default function App() {
 
 interface MainContentProps {
   entries: ClipboardEntry[];
+  folders: Folder[];
+  activeFolderId: string | null;
+  setActiveFolderId: (id: string | null) => void;
   search: string;
   setSearch: (s: string) => void;
   copiedId: string | null;
@@ -222,11 +254,15 @@ interface MainContentProps {
   onTabChange: (tab: Tab) => void;
   onLock: () => void;
   onOpenPasswordSettings: () => void;
+  onOpenFolderManager: () => void;
   loadEntries: () => Promise<void>;
 }
 
 function MainContent({
   entries,
+  folders,
+  activeFolderId,
+  setActiveFolderId,
   search,
   setSearch,
   copiedId,
@@ -241,17 +277,120 @@ function MainContent({
   onTabChange,
   onLock,
   onOpenPasswordSettings,
+  onOpenFolderManager,
   loadEntries,
 }: MainContentProps) {
+  const [focusedIndex, setFocusedIndex] = useState(-1);
+  const [editTrigger, setEditTrigger] = useState(0);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   const quotaPercent = storageInfo.bytesUsed / STORAGE_QUOTA_BYTES;
-  // Filter entries by search
-  const filtered = entries.filter((e) =>
-    e.content.toLowerCase().includes(search.toLowerCase()),
-  );
+
+  // Filter entries by search and active folder
+  const filtered = entries
+    .filter((e) => e.content.toLowerCase().includes(search.toLowerCase()))
+    .filter((e) => activeFolderId === null || e.folderId === activeFolderId);
 
   // Split into pinned + unpinned
   const pinned = filtered.filter((e) => e.pinned);
   const unpinned = filtered.filter((e) => !e.pinned);
+
+  // Flat array for keyboard indexing
+  const allClips = [...pinned, ...unpinned];
+
+  // Reset focus when search or folder changes
+  useEffect(() => {
+    setFocusedIndex(-1);
+  }, [search, activeFolderId]);
+
+  // Scroll focused item into view
+  useEffect(() => {
+    if (focusedIndex >= 0) {
+      itemRefs.current[focusedIndex]?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [focusedIndex]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    if (tab !== 'clips') return;
+
+    function handleKeyDown(e: KeyboardEvent) {
+      const isSearchFocused = document.activeElement === searchInputRef.current;
+
+      // When search is focused, only handle Escape and ArrowDown
+      if (isSearchFocused) {
+        if (e.key === 'Escape') {
+          if (search) {
+            setSearch('');
+          } else {
+            searchInputRef.current?.blur();
+            setFocusedIndex(-1);
+          }
+          e.preventDefault();
+        } else if (e.key === 'ArrowDown') {
+          searchInputRef.current?.blur();
+          setFocusedIndex(0);
+          e.preventDefault();
+        }
+        return;
+      }
+
+      switch (e.key) {
+        case 'j':
+        case 'ArrowDown':
+          e.preventDefault();
+          setFocusedIndex((i) => Math.min(i + 1, allClips.length - 1));
+          break;
+        case 'k':
+        case 'ArrowUp':
+          e.preventDefault();
+          setFocusedIndex((i) => Math.max(i - 1, -1));
+          break;
+        case 'Enter':
+          if (focusedIndex >= 0 && allClips[focusedIndex]) {
+            e.preventDefault();
+            handleCopy(allClips[focusedIndex]);
+          }
+          break;
+        case 'p':
+          if (focusedIndex >= 0 && allClips[focusedIndex]) {
+            e.preventDefault();
+            handleTogglePin(allClips[focusedIndex]);
+          }
+          break;
+        case 'd':
+          if (focusedIndex >= 0 && allClips[focusedIndex]) {
+            e.preventDefault();
+            handleDelete(allClips[focusedIndex].id);
+            setFocusedIndex((i) => Math.min(i, allClips.length - 2));
+          }
+          break;
+        case 'e':
+          if (focusedIndex >= 0 && allClips[focusedIndex]) {
+            e.preventDefault();
+            setEditTrigger((t) => t + 1);
+          }
+          break;
+        case '/':
+          e.preventDefault();
+          searchInputRef.current?.focus();
+          setFocusedIndex(-1);
+          break;
+        case 'Escape':
+          if (search) {
+            setSearch('');
+          } else {
+            setFocusedIndex(-1);
+          }
+          e.preventDefault();
+          break;
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [tab, focusedIndex, allClips, search]);
 
   // Copy an entry to clipboard
   const handleCopy = useCallback(async (entry: ClipboardEntry) => {
@@ -276,6 +415,12 @@ function MainContent({
   // Delete single entry
   const handleDelete = useCallback(async (id: string) => {
     await deleteEntry(id);
+    await loadEntries();
+  }, []);
+
+  // Move entry to folder
+  const handleMoveToFolder = useCallback(async (id: string, folderId: string | undefined) => {
+    await updateEntry(id, { folderId });
     await loadEntries();
   }, []);
 
@@ -388,6 +533,13 @@ function MainContent({
               </Menu.Target>
               <Menu.Dropdown>
                 <Menu.Item
+                  leftSection={<IconFolder size={14} />}
+                  onClick={onOpenFolderManager}
+                >
+                  Folders
+                </Menu.Item>
+                <Menu.Divider />
+                <Menu.Item
                   leftSection={<IconShieldLock size={14} />}
                   onClick={onOpenPasswordSettings}
                 >
@@ -433,21 +585,46 @@ function MainContent({
         />
 
         {tab === 'clips' && (
-          <TextInput
-            placeholder="Search clips..."
-            leftSection={<IconSearch size={16} />}
-            rightSection={
-              search ? (
-                <ActionIcon variant="subtle" size="xs" onClick={() => setSearch('')}>
-                  <IconX size={12} />
-                </ActionIcon>
-              ) : null
-            }
-            value={search}
-            onChange={(e) => setSearch(e.currentTarget.value)}
-            size="sm"
-            mt="xs"
-          />
+          <>
+            <TextInput
+              placeholder="Search clips... (press / to focus)"
+              leftSection={<IconSearch size={16} />}
+              rightSection={
+                search ? (
+                  <ActionIcon variant="subtle" size="xs" onClick={() => setSearch('')}>
+                    <IconX size={12} />
+                  </ActionIcon>
+                ) : null
+              }
+              value={search}
+              onChange={(e) => setSearch(e.currentTarget.value)}
+              size="sm"
+              mt="xs"
+              ref={searchInputRef}
+            />
+            {folders.length > 0 && (
+              <Group gap={4} mt={4} style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
+                <Badge
+                  variant={activeFolderId === null ? 'filled' : 'light'}
+                  style={{ cursor: 'pointer', flexShrink: 0 }}
+                  onClick={() => setActiveFolderId(null)}
+                >
+                  All
+                </Badge>
+                {folders.map((f) => (
+                  <Badge
+                    key={f.id}
+                    color={f.color}
+                    variant={activeFolderId === f.id ? 'filled' : 'light'}
+                    style={{ cursor: 'pointer', flexShrink: 0 }}
+                    onClick={() => setActiveFolderId(f.id)}
+                  >
+                    {f.name}
+                  </Badge>
+                ))}
+              </Group>
+            )}
+          </>
         )}
       </Box>
 
@@ -467,9 +644,11 @@ function MainContent({
             <Text c="dimmed" size="sm" ta="center">
               {search
                 ? 'No clips match your search'
+                : activeFolderId
+                ? 'No clips in this folder'
                 : 'No clips yet'}
             </Text>
-            {!search && (
+            {!search && !activeFolderId && (
               <Text c="dimmed" size="xs" ta="center">
                 Copy something and it'll appear here.
               </Text>
@@ -483,15 +662,20 @@ function MainContent({
                 <Text size="xs" c="dimmed" fw={600} tt="uppercase">
                   Pinned
                 </Text>
-                {pinned.map((entry) => (
+                {pinned.map((entry, i) => (
                   <ClipItem
                     key={entry.id}
                     entry={entry}
+                    folders={folders}
                     copiedId={copiedId}
+                    focused={focusedIndex === i}
+                    forceEdit={focusedIndex === i ? editTrigger : 0}
+                    itemRef={(el) => { itemRefs.current[i] = el; }}
                     onCopy={handleCopy}
                     onTogglePin={handleTogglePin}
                     onDelete={handleDelete}
                     onSaveEdit={handleSaveEdit}
+                    onMoveToFolder={handleMoveToFolder}
                     formatTime={formatTime}
                     truncate={truncate}
                   />
@@ -507,19 +691,27 @@ function MainContent({
                     Recent
                   </Text>
                 )}
-                {unpinned.map((entry) => (
-                  <ClipItem
-                    key={entry.id}
-                    entry={entry}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
-                    onTogglePin={handleTogglePin}
-                    onDelete={handleDelete}
-                    onSaveEdit={handleSaveEdit}
-                    formatTime={formatTime}
-                    truncate={truncate}
-                  />
-                ))}
+                {unpinned.map((entry, i) => {
+                  const globalIndex = pinned.length + i;
+                  return (
+                    <ClipItem
+                      key={entry.id}
+                      entry={entry}
+                      folders={folders}
+                      copiedId={copiedId}
+                      focused={focusedIndex === globalIndex}
+                      forceEdit={focusedIndex === globalIndex ? editTrigger : 0}
+                      itemRef={(el) => { itemRefs.current[globalIndex] = el; }}
+                      onCopy={handleCopy}
+                      onTogglePin={handleTogglePin}
+                      onDelete={handleDelete}
+                      onSaveEdit={handleSaveEdit}
+                      onMoveToFolder={handleMoveToFolder}
+                      formatTime={formatTime}
+                      truncate={truncate}
+                    />
+                  );
+                })}
               </>
             )}
           </Stack>
@@ -560,22 +752,32 @@ function MainContent({
 
 interface ClipItemProps {
   entry: ClipboardEntry;
+  folders: Folder[];
   copiedId: string | null;
+  focused?: boolean;
+  forceEdit?: number;
+  itemRef?: (el: HTMLDivElement | null) => void;
   onCopy: (entry: ClipboardEntry) => void;
   onTogglePin: (entry: ClipboardEntry) => void;
   onDelete: (id: string) => void;
   onSaveEdit: (id: string, newContent: string) => void;
+  onMoveToFolder: (id: string, folderId: string | undefined) => void;
   formatTime: (ts: number) => string;
   truncate: (text: string, max?: number) => string;
 }
 
 function ClipItem({
   entry,
+  folders,
   copiedId,
+  focused,
+  forceEdit,
+  itemRef,
   onCopy,
   onTogglePin,
   onDelete,
   onSaveEdit,
+  onMoveToFolder,
   formatTime,
   truncate,
 }: ClipItemProps) {
@@ -586,6 +788,8 @@ function ClipItem({
   const isCopied = copiedId === entry.id;
   const isLong = entry.content.length > 120;
 
+  const activeFolder = entry.folderId ? folders.find((f) => f.id === entry.folderId) : null;
+
   // Focus textarea when editing starts
   useEffect(() => {
     if (editing && editRef.current) {
@@ -593,6 +797,15 @@ function ClipItem({
       editRef.current.selectionStart = editRef.current.value.length;
     }
   }, [editing]);
+
+  // Trigger edit from keyboard shortcut
+  useEffect(() => {
+    if (forceEdit && forceEdit > 0) {
+      setEditValue(entry.content);
+      setEditing(true);
+      setExpanded(true);
+    }
+  }, [forceEdit]);
 
   function startEdit(e: React.MouseEvent) {
     e.stopPropagation();
@@ -616,12 +829,17 @@ function ClipItem({
 
   return (
     <Box
+      ref={itemRef}
       p="xs"
       style={{
         borderRadius: 'var(--mantine-radius-sm)',
-        border: '1px solid var(--mantine-color-default-border)',
+        border: focused
+          ? '1px solid var(--mantine-color-default-border)'
+          : '1px solid var(--mantine-color-default-border)',
+        borderLeft: focused ? '2px solid var(--mantine-color-blue-6)' : '1px solid var(--mantine-color-default-border)',
         cursor: editing ? 'default' : 'pointer',
         transition: 'background 0.15s',
+        background: focused ? 'var(--mantine-color-gray-light-hover)' : 'transparent',
       }}
       onClick={() => {
         if (editing) return;
@@ -635,7 +853,7 @@ function ClipItem({
         if (!editing) e.currentTarget.style.background = 'var(--mantine-color-gray-light-hover)';
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = 'transparent';
+        e.currentTarget.style.background = focused ? 'var(--mantine-color-gray-light-hover)' : 'transparent';
       }}
     >
       {/* Image preview */}
@@ -730,6 +948,16 @@ function ClipItem({
               · {entry.sourceTitle}
             </Text>
           )}
+          {activeFolder && (
+            <Badge
+              size="xs"
+              color={activeFolder.color}
+              variant="dot"
+              style={{ cursor: 'default' }}
+            >
+              {activeFolder.name}
+            </Badge>
+          )}
           {isLong && !editing && (
             <Text size="xs" c="blue" style={{ cursor: 'pointer' }}>
               {expanded ? (
@@ -758,6 +986,51 @@ function ClipItem({
                 )}
               </ActionIcon>
             </Tooltip>
+            {/* Folder assignment */}
+            {folders.length > 0 && (
+              <Menu shadow="md" width={160} position="bottom-end">
+                <Menu.Target>
+                  <Tooltip label="Move to folder">
+                    <ActionIcon
+                      variant="subtle"
+                      size="xs"
+                      color={activeFolder ? activeFolder.color : undefined}
+                    >
+                      <IconFolder size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  {entry.folderId && (
+                    <>
+                      <Menu.Item onClick={() => onMoveToFolder(entry.id, undefined)}>
+                        No folder
+                      </Menu.Item>
+                      <Menu.Divider />
+                    </>
+                  )}
+                  {folders.map((f) => (
+                    <Menu.Item
+                      key={f.id}
+                      leftSection={
+                        <Box
+                          w={10}
+                          h={10}
+                          style={{
+                            borderRadius: '50%',
+                            background: `var(--mantine-color-${f.color}-6)`,
+                            flexShrink: 0,
+                          }}
+                        />
+                      }
+                      onClick={() => onMoveToFolder(entry.id, f.id)}
+                    >
+                      {f.name}
+                    </Menu.Item>
+                  ))}
+                </Menu.Dropdown>
+              </Menu>
+            )}
             <Tooltip label={isCopied ? 'Copied!' : 'Copy'}>
               <ActionIcon
                 variant="subtle"
