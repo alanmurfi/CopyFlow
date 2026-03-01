@@ -1,10 +1,11 @@
 // ============================================
 // CopyFlow — Offscreen Document Script
 // ============================================
-// Separate file because Manifest V3 CSP blocks inline scripts.
-// Uses document.execCommand('paste') instead of navigator.clipboard.read()
-// because the Clipboard API requires document focus, which offscreen
-// documents don't have.
+// Uses navigator.clipboard.read() to support both text and images.
+// With the clipboardRead permission, Chrome does not require document
+// focus for this API in extension contexts.
+// Falls back to document.execCommand('paste') for text if the
+// Clipboard API is unavailable.
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Security: only accept messages from our own extension
@@ -27,22 +28,64 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-function handleReadClipboard(sendResponse) {
+async function handleReadClipboard(sendResponse) {
+  try {
+    const items = await navigator.clipboard.read();
+
+    for (const item of items) {
+      // Check for raster image types — SVG excluded (could contain script payloads)
+      const imageType = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+        .find((t) => item.types.includes(t));
+
+      if (imageType) {
+        const blob = await item.getType(imageType);
+        const dataUrl = await blobToDataUrl(blob);
+        sendResponse({
+          success: true,
+          type: 'image',
+          content: dataUrl,      // used for dedup
+          imageDataUrl: dataUrl, // used for display
+        });
+        return;
+      }
+
+      // Plain text
+      if (item.types.includes('text/plain')) {
+        const blob = await item.getType('text/plain');
+        const text = await blob.text();
+        if (text.trim()) {
+          sendResponse({ success: true, type: 'text', content: text });
+          return;
+        }
+      }
+    }
+
+    sendResponse({ success: true, type: null, content: null });
+  } catch (_err) {
+    // Clipboard API unavailable — fall back to execCommand for text
+    handleReadClipboardFallback(sendResponse);
+  }
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('FileReader failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function handleReadClipboardFallback(sendResponse) {
   try {
     const textarea = document.getElementById('clipboard-area');
     textarea.value = '';
     textarea.focus();
 
-    // execCommand('paste') works with clipboardRead permission
-    // without requiring document focus like the Clipboard API does
     const success = document.execCommand('paste');
 
     if (success && textarea.value.trim()) {
-      sendResponse({
-        success: true,
-        type: 'text',
-        content: textarea.value,
-      });
+      sendResponse({ success: true, type: 'text', content: textarea.value });
     } else {
       sendResponse({ success: true, type: null, content: null });
     }
