@@ -92,10 +92,16 @@ const ENCRYPTION_META: EncryptionMeta = { version: 1, salt: 'salt-value', passwo
 beforeEach(() => {
   localStore = {};
 
-  // Reset chrome mock implementations each test (in case a test overrode them)
+  // Re-apply chrome mock implementations (vi.resetAllMocks wipes them each afterEach)
+  mockChrome.storage.local.get.mockImplementation(async (key: string) => ({ [key]: localStore[key] }));
   mockChrome.storage.local.set.mockImplementation(async (items: Record<string, unknown>) => {
     Object.assign(localStore, items);
   });
+  mockChrome.storage.local.remove.mockImplementation(async (key: string | string[]) => {
+    const keys = typeof key === 'string' ? [key] : key;
+    for (const k of keys) delete localStore[k];
+  });
+  mockChrome.storage.local.getBytesInUse.mockResolvedValue(1024);
 
   vi.stubGlobal('chrome', mockChrome);
 
@@ -111,7 +117,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  vi.clearAllMocks();
+  vi.resetAllMocks(); // clears call history AND pending mockResolvedValueOnce queues
 });
 
 // ============================================
@@ -310,11 +316,6 @@ describe('getEntries — encryption enabled, unlocked', () => {
 describe('getEntries — encryption enabled, locked', () => {
   it('returns empty array when session key is missing', async () => {
     localStore['copyflow_encryption_meta'] = ENCRYPTION_META;
-    // Need at least one entry so getEntries() doesn't return early before calling getSessionKey
-    localStore['copyflow_entries'] = [{
-      id: 'enc-1', type: 'text', timestamp: 1000, pinned: false,
-      encrypted: { iv: 'iv', ciphertext: 'ct' },
-    }];
     vi.mocked(getSessionKey).mockResolvedValueOnce(null);
     expect(await getEntries()).toEqual([]);
   });
@@ -391,7 +392,6 @@ describe('addEntry — no encryption', () => {
 describe('addEntry — encryption enabled, unlocked', () => {
   it('encrypts entry before writing — stores EncryptedEntry, no plaintext content', async () => {
     localStore['copyflow_encryption_meta'] = ENCRYPTION_META;
-    vi.mocked(getSessionKey).mockImplementation(async () => ({} as CryptoKey));
     await addEntry(makeEntry());
     const stored = localStore['copyflow_entries'] as any[];
     expect(stored).toHaveLength(1);
