@@ -455,10 +455,17 @@ function MainContent({
   // Copy an entry to clipboard
   const handleCopy = useCallback(async (entry: ClipboardEntry) => {
     try {
-      await chrome.runtime.sendMessage({
-        type: 'COPY_TO_CLIPBOARD',
-        text: entry.content,
-      });
+      if (entry.type === 'image' && entry.imageDataUrl) {
+        // Popup has focus — use clipboard.write() directly to copy image data
+        const response = await fetch(entry.imageDataUrl);
+        const blob = await response.blob();
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      } else {
+        await chrome.runtime.sendMessage({
+          type: 'COPY_TO_CLIPBOARD',
+          text: entry.content,
+        });
+      }
       setCopiedId(entry.id);
       setTimeout(() => setCopiedId(null), 1500);
     } catch (err) {
@@ -932,69 +939,71 @@ function ClipItem({
         />
       )}
 
-      {/* Text content — editing, expanded, or collapsed */}
-      {editing ? (
-        <Box onClick={(e) => e.stopPropagation()}>
-          <Textarea
-            ref={editRef}
-            value={editValue}
-            onChange={(e) => setEditValue(e.currentTarget.value)}
-            autosize
-            minRows={2}
-            maxRows={8}
-            size="xs"
-            styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                saveEdit();
-              }
-              if (e.key === 'Escape') {
-                cancelEdit();
-              }
+      {/* Text content — hidden for image entries (image preview is enough) */}
+      {entry.type !== 'image' && (
+        editing ? (
+          <Box onClick={(e) => e.stopPropagation()}>
+            <Textarea
+              ref={editRef}
+              value={editValue}
+              onChange={(e) => setEditValue(e.currentTarget.value)}
+              autosize
+              minRows={2}
+              maxRows={8}
+              size="xs"
+              styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  saveEdit();
+                }
+                if (e.key === 'Escape') {
+                  cancelEdit();
+                }
+              }}
+            />
+            <Group gap={4} mt={4}>
+              <Text
+                size="xs"
+                fw={600}
+                c="blue"
+                style={{ cursor: 'pointer' }}
+                onClick={saveEdit}
+              >
+                Save
+              </Text>
+              <Text
+                size="xs"
+                c="dimmed"
+                style={{ cursor: 'pointer' }}
+                onClick={cancelEdit}
+              >
+                Cancel
+              </Text>
+              <Text size="xs" c="dimmed">· Ctrl+Enter / Esc</Text>
+            </Group>
+          </Box>
+        ) : expanded ? (
+          <Text
+            size="sm"
+            style={{
+              wordBreak: 'break-word',
+              whiteSpace: 'pre-wrap',
+              maxHeight: 200,
+              overflowY: 'auto',
+              background: 'var(--mantine-color-gray-light)',
+              borderRadius: 4,
+              padding: 8,
+              fontSize: 12,
+              fontFamily: 'monospace',
             }}
-          />
-          <Group gap={4} mt={4}>
-            <Text
-              size="xs"
-              fw={600}
-              c="blue"
-              style={{ cursor: 'pointer' }}
-              onClick={saveEdit}
-            >
-              Save
-            </Text>
-            <Text
-              size="xs"
-              c="dimmed"
-              style={{ cursor: 'pointer' }}
-              onClick={cancelEdit}
-            >
-              Cancel
-            </Text>
-            <Text size="xs" c="dimmed">· Ctrl+Enter / Esc</Text>
-          </Group>
-        </Box>
-      ) : expanded ? (
-        <Text
-          size="sm"
-          style={{
-            wordBreak: 'break-word',
-            whiteSpace: 'pre-wrap',
-            maxHeight: 200,
-            overflowY: 'auto',
-            background: 'var(--mantine-color-gray-light)',
-            borderRadius: 4,
-            padding: 8,
-            fontSize: 12,
-            fontFamily: 'monospace',
-          }}
-        >
-          {entry.content}
-        </Text>
-      ) : (
-        <Text size="sm" lineClamp={2} style={{ wordBreak: 'break-word' }}>
-          {truncate(entry.content)}
-        </Text>
+          >
+            {entry.content}
+          </Text>
+        ) : (
+          <Text size="sm" lineClamp={2} style={{ wordBreak: 'break-word' }}>
+            {truncate(entry.content)}
+          </Text>
+        )
       )}
 
       {/* Metadata row */}
@@ -1032,11 +1041,13 @@ function ClipItem({
         {/* Action buttons */}
         {!editing && (
           <Group gap={2} onClick={(e) => e.stopPropagation()}>
-            <Tooltip label="Edit">
-              <ActionIcon variant="subtle" size="xs" onClick={startEdit}>
-                <IconEdit size={14} />
-              </ActionIcon>
-            </Tooltip>
+            {entry.type !== 'image' && (
+              <Tooltip label="Edit">
+                <ActionIcon variant="subtle" size="xs" onClick={startEdit}>
+                  <IconEdit size={14} />
+                </ActionIcon>
+              </Tooltip>
+            )}
             <Tooltip label={entry.pinned ? 'Unpin' : 'Pin'}>
               <ActionIcon variant="subtle" size="xs" onClick={() => onTogglePin(entry)}>
                 {entry.pinned ? (
