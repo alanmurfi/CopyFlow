@@ -2,11 +2,22 @@
 // CopyFlow — Background Service Worker
 // ============================================
 // Polls clipboard via offscreen document, stores new entries.
-// Manages context menus and auto-cleanup.
+// Manages context menus, auto-cleanup, and encryption lock state.
 
 import { v4 as uuidv4 } from 'uuid';
-import { addEntry, getEntries, getLastClipboard, setLastClipboard, getSettings, deleteEntry } from '../lib/storage';
+import { addEntry, getEntries, setLastClipboard, isLastClipboard, getSettings, deleteEntries, getEncryptionMeta, isEncryptionEnabled } from '../lib/storage';
+import { deriveCryptoKey, verifyPassword, saltFromBase64 } from '../lib/crypto';
+import { storeSessionKey, clearSessionKey, isUnlocked } from '../lib/session';
+import { getSnippetShortcuts, getSnippets, resolveTemplate } from '../lib/snippets';
+import { isFeatureEnabled } from '../lib/features';
 import type { ClipboardEntry } from '../types';
+
+// Strip control characters and Unicode BiDi overrides that could cause UI spoofing
+function sanitizeMenuLabel(text: string): string {
+  return text
+    .replace(/[\x00-\x1f\u202a-\u202e\u2066-\u2069\u200e\u200f]/g, '')
+    .replace(/\n/g, ' ');
+}
 
 export default defineBackground(() => {
   const POLL_INTERVAL = 1500; // ms
@@ -14,6 +25,12 @@ export default defineBackground(() => {
   const MAX_CONTEXT_MENU_ITEMS = 10;
   let pollingTimer: ReturnType<typeof setInterval> | null = null;
   let offscreenReady = false;
+  let autoLockTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Allow popup to access session storage for the encryption key
+  chrome.storage.session.setAccessLevel({
+    accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' as any,
+  });
 
   // Ensure offscreen document exists
   async function ensureOffscreen(): Promise<void> {
@@ -68,6 +85,12 @@ export default defineBackground(() => {
   // Poll the clipboard for new content
   async function pollClipboard(): Promise<void> {
     try {
+      // Skip polling when locked — we can't encrypt without the key
+      const settings = await getSettings();
+      if (settings.passwordEnabled && !(await isUnlocked())) {
+        return;
+      }
+
       await ensureOffscreen();
 
       const response = await sendToOffscreen({ type: 'READ_CLIPBOARD' });
@@ -76,13 +99,12 @@ export default defineBackground(() => {
         return;
       }
 
-      // Check if content is new
-      const lastClipboard = await getLastClipboard();
-      if (response.content === lastClipboard) {
+      // Check if content is new (handles both plaintext and hashed dedup)
+      if (await isLastClipboard(response.content)) {
         return;
       }
 
-      // Save the new content
+      // Save the new content (hashed if encryption enabled)
       await setLastClipboard(response.content);
 
       const tabInfo = await getActiveTabInfo();
@@ -101,9 +123,32 @@ export default defineBackground(() => {
       await addEntry(entry);
       console.log('CopyFlow: Saved new clip:', response.content.substring(0, 50));
 
-      // Storage listener will rebuild context menus
+      // Reset auto-lock timer on activity
+      resetAutoLockTimer();
     } catch (err) {
       console.debug('CopyFlow: Poll error:', err);
+    }
+  }
+
+  // ---- Auto-lock timer ----
+
+  async function resetAutoLockTimer(): Promise<void> {
+    if (autoLockTimer) {
+      clearTimeout(autoLockTimer);
+      autoLockTimer = null;
+    }
+
+    try {
+      const settings = await getSettings();
+      if (settings.passwordEnabled && settings.autoLockMinutes > 0) {
+        autoLockTimer = setTimeout(async () => {
+          await clearSessionKey();
+          await rebuildContextMenus();
+          console.log('CopyFlow: Auto-locked after inactivity');
+        }, settings.autoLockMinutes * 60 * 1000);
+      }
+    } catch {
+      // Settings read failed — skip timer setup
     }
   }
 
@@ -116,6 +161,18 @@ export default defineBackground(() => {
     menuRebuildPending = true;
     try {
       await chrome.contextMenus.removeAll();
+
+      // When locked, show a single disabled menu item
+      const settings = await getSettings();
+      if (settings.passwordEnabled && !(await isUnlocked())) {
+        chrome.contextMenus.create({
+          id: 'copyflow-locked',
+          title: 'CopyFlow — Locked',
+          contexts: ['editable'],
+          enabled: false,
+        });
+        return;
+      }
 
       const entries = await getEntries();
       if (entries.length === 0) return;
@@ -135,13 +192,13 @@ export default defineBackground(() => {
 
       for (const entry of pinned) {
         if (count >= MAX_CONTEXT_MENU_ITEMS) break;
-        const label = entry.content.length > 60
+        const raw = entry.content.length > 60
           ? entry.content.substring(0, 57) + '...'
           : entry.content;
         chrome.contextMenus.create({
           id: `copyflow-entry-${entry.id}`,
           parentId: 'copyflow-parent',
-          title: `📌 ${label.replace(/\n/g, ' ')}`,
+          title: `📌 ${sanitizeMenuLabel(raw)}`,
           contexts: ['editable'],
         });
         count++;
@@ -158,13 +215,13 @@ export default defineBackground(() => {
 
       for (const entry of unpinned) {
         if (count >= MAX_CONTEXT_MENU_ITEMS) break;
-        const label = entry.content.length > 60
+        const raw = entry.content.length > 60
           ? entry.content.substring(0, 57) + '...'
           : entry.content;
         chrome.contextMenus.create({
           id: `copyflow-entry-${entry.id}`,
           parentId: 'copyflow-parent',
-          title: label.replace(/\n/g, ' '),
+          title: sanitizeMenuLabel(raw),
           contexts: ['editable'],
         });
         count++;
@@ -186,28 +243,12 @@ export default defineBackground(() => {
     const entry = entries.find((e) => e.id === entryId);
 
     if (entry && tab?.id) {
-      // Insert text into the focused field on the page
+      // Insert text into the focused field via content script
       chrome.tabs.sendMessage(tab.id, {
         type: 'COPYFLOW_INSERT_TEXT',
         text: entry.content,
       }).catch(() => {
-        // Content script might not be injected — use execCommand approach via scripting
-        chrome.scripting.executeScript({
-          target: { tabId: tab.id! },
-          func: (text: string) => {
-            const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement;
-            if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
-              const start = el.selectionStart ?? el.value.length;
-              const end = el.selectionEnd ?? el.value.length;
-              el.value = el.value.slice(0, start) + text + el.value.slice(end);
-              el.selectionStart = el.selectionEnd = start + text.length;
-              el.dispatchEvent(new Event('input', { bubbles: true }));
-            } else if (el?.isContentEditable) {
-              document.execCommand('insertText', false, text);
-            }
-          },
-          args: [entry.content],
-        });
+        console.debug('CopyFlow: Content script not available on this tab');
       });
     }
   });
@@ -219,15 +260,18 @@ export default defineBackground(() => {
       const settings = await getSettings();
       if (!settings.autoDeleteDays || settings.autoDeleteDays <= 0) return;
 
+      // Skip cleanup when locked if encryption is enabled
+      if (settings.passwordEnabled && !(await isUnlocked())) {
+        return;
+      }
+
       const cutoff = Date.now() - settings.autoDeleteDays * 24 * 60 * 60 * 1000;
       const entries = await getEntries();
       const toDelete = entries.filter((e) => !e.pinned && e.timestamp < cutoff);
 
-      for (const entry of toDelete) {
-        await deleteEntry(entry.id);
-      }
-
       if (toDelete.length > 0) {
+        // Batch delete in a single atomic operation (uses mutex internally)
+        await deleteEntries(toDelete.map((e) => e.id));
         console.log(`CopyFlow: Auto-deleted ${toDelete.length} old clips`);
         await rebuildContextMenus();
       }
@@ -242,6 +286,92 @@ export default defineBackground(() => {
     pollingTimer = setInterval(pollClipboard, POLL_INTERVAL);
     setTimeout(pollClipboard, 500);
   }
+
+  // ---- Snippet helpers ----
+
+  /** Broadcast snippet updates to all tabs so content scripts refresh shortcut maps. */
+  async function broadcastSnippetsUpdated(): Promise<void> {
+    try {
+      const tabs = await chrome.tabs.query({});
+      for (const tab of tabs) {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, { type: 'COPYFLOW_SNIPPETS_UPDATED' }).catch(() => {
+            // Content script not loaded on this tab — ignore
+          });
+        }
+      }
+    } catch {
+      // tabs.query failed — ignore
+    }
+  }
+
+  /** Read current clipboard via offscreen document (for {{clipboard}} template variable). */
+  async function readClipboardText(): Promise<string> {
+    try {
+      await ensureOffscreen();
+      const response = await sendToOffscreen({ type: 'READ_CLIPBOARD' });
+      return response?.success ? (response.content ?? '') : '';
+    } catch {
+      return '';
+    }
+  }
+
+  // ---- Content script message handler (snippets) ----
+  // These messages come FROM content scripts (sender.tab is defined).
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (sender.id !== chrome.runtime.id) return false;
+    if (sender.tab === undefined) return false; // Only content scripts
+
+    if (message.type === 'GET_SNIPPETS') {
+      (async () => {
+        try {
+          const enabled = await isFeatureEnabled('snippetsEnabled');
+          if (!enabled) {
+            sendResponse({ success: true, shortcuts: [] });
+            return;
+          }
+          const shortcuts = await getSnippetShortcuts();
+          sendResponse({ success: true, shortcuts });
+        } catch (err) {
+          console.debug('CopyFlow: GET_SNIPPETS error:', err);
+          sendResponse({ success: false, shortcuts: [] });
+        }
+      })();
+      return true;
+    }
+
+    if (message.type === 'EXPAND_SNIPPET') {
+      (async () => {
+        try {
+          if (typeof message.shortcut !== 'string') {
+            sendResponse({ success: false, error: 'Invalid shortcut' });
+            return;
+          }
+          const enabled = await isFeatureEnabled('snippetsEnabled');
+          if (!enabled) {
+            sendResponse({ success: false, error: 'Feature disabled' });
+            return;
+          }
+          const snippets = await getSnippets();
+          const snippet = snippets.find((s) => s.shortcut === message.shortcut);
+          if (!snippet) {
+            sendResponse({ success: false, error: 'Snippet not found' });
+            return;
+          }
+          const clipboardText = await readClipboardText();
+          const resolved = resolveTemplate(snippet.content, clipboardText);
+          sendResponse({ success: true, text: resolved.text, cursorOffset: resolved.cursorOffset });
+        } catch (err) {
+          console.debug('CopyFlow: EXPAND_SNIPPET error:', err);
+          sendResponse({ success: false, error: 'Expansion failed' });
+        }
+      })();
+      return true;
+    }
+
+    return false;
+  });
 
   // Listen for messages from popup (extension pages only — not content scripts)
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -259,15 +389,59 @@ export default defineBackground(() => {
         sendToOffscreen({ type: 'WRITE_CLIPBOARD', text: message.text }).then(
           (response) => {
             sendResponse(response);
-          }
+          },
         );
       });
       return true;
     }
+
     if (message.type === 'REBUILD_CONTEXT_MENUS') {
       rebuildContextMenus().then(() => sendResponse({ success: true }));
       return true;
     }
+
+    if (message.type === 'LOCK_EXTENSION') {
+      clearSessionKey()
+        .then(() => rebuildContextMenus())
+        .then(() => sendResponse({ success: true }));
+      return true;
+    }
+
+    if (message.type === 'SNIPPETS_CHANGED') {
+      broadcastSnippetsUpdated().then(() => sendResponse({ success: true }));
+      return true;
+    }
+
+    if (message.type === 'UNLOCK_EXTENSION') {
+      (async () => {
+        try {
+          const meta = await getEncryptionMeta();
+          if (!meta) {
+            sendResponse({ success: false, error: 'No encryption configured' });
+            return;
+          }
+
+          const salt = saltFromBase64(meta.salt);
+          const valid = await verifyPassword(message.password, salt, meta.passwordHash);
+          if (!valid) {
+            sendResponse({ success: false, error: 'Wrong password' });
+            return;
+          }
+
+          // Derive encryption key and store in session
+          const key = await deriveCryptoKey(message.password, salt);
+          await storeSessionKey(key);
+          await rebuildContextMenus();
+          resetAutoLockTimer();
+          sendResponse({ success: true });
+        } catch (err) {
+          console.error('CopyFlow: Unlock error:', err);
+          sendResponse({ success: false, error: 'Unlock failed' });
+        }
+      })();
+      return true;
+    }
+
     return false;
   });
 

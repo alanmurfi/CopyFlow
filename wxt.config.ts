@@ -15,7 +15,6 @@ export default defineConfig({
       'activeTab',
       'tabs',
       'contextMenus',
-      'scripting',
     ],
     icons: {
       16: 'icon/icon-16.png',
@@ -30,6 +29,9 @@ export default defineConfig({
         },
         description: 'Open CopyFlow clipboard history',
       },
+    },
+    content_security_policy: {
+      extension_pages: "script-src 'self'; object-src 'self'",
     },
   },
 });

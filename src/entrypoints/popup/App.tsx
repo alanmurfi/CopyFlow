@@ -11,6 +11,8 @@ import {
   Tooltip,
   Box,
   Menu,
+  Loader,
+  SegmentedControl,
   useMantineColorScheme,
 } from '@mantine/core';
 import {
@@ -30,6 +32,8 @@ import {
   IconDownload,
   IconUpload,
   IconDots,
+  IconLock,
+  IconShieldLock,
 } from '@tabler/icons-react';
 import {
   getEntries,
@@ -39,30 +43,81 @@ import {
   getStorageUsage,
   exportData,
   importData,
+  getSettings,
+  STORAGE_QUOTA_BYTES,
+  STORAGE_QUOTA_WARN_THRESHOLD,
 } from '../../lib/storage';
-import type { ClipboardEntry } from '../../types';
+import { isUnlocked } from '../../lib/session';
+import { getFeatureFlags } from '../../lib/features';
+import type { ClipboardEntry, Settings, FeatureFlags } from '../../types';
+import LockScreen from './LockScreen';
+import PasswordSettings from './PasswordSettings';
+import SnippetsPanel from './SnippetsPanel';
+
+type View = 'main' | 'passwordSettings';
+type Tab = 'clips' | 'snippets';
 
 export default function App() {
+  const [view, setView] = useState<View>('main');
+  const [tab, setTab] = useState<Tab>('clips');
+  const [isLocked, setIsLocked] = useState<boolean | null>(null); // null = loading
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags | null>(null);
   const [entries, setEntries] = useState<ClipboardEntry[]>([]);
   const [search, setSearch] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [storageInfo, setStorageInfo] = useState({ bytesUsed: 0, totalEntries: 0 });
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
 
-  // Load entries on mount and listen for storage changes
+  // Check lock state and load settings on mount
   useEffect(() => {
-    loadEntries();
-    loadStorageInfo();
+    checkLockState();
+    // Check for a quota exceeded flag set by background addEntry failure
+    chrome.storage.local.get('copyflow_quota_exceeded').then((result) => {
+      if (result['copyflow_quota_exceeded']) {
+        setQuotaExceeded(true);
+        chrome.storage.local.remove('copyflow_quota_exceeded').catch(() => {});
+      }
+    });
+  }, []);
 
+  // Load entries when unlocked
+  useEffect(() => {
+    if (isLocked === false) {
+      loadEntries();
+      loadStorageInfo();
+    }
+  }, [isLocked]);
+
+  // Listen for storage changes
+  useEffect(() => {
     const listener = (changes: { [key: string]: chrome.storage.StorageChange }) => {
-      if (changes['copyflow_entries']) {
-        setEntries(changes['copyflow_entries'].newValue ?? []);
+      if (changes['copyflow_entries'] && isLocked === false) {
+        // When encrypted, newValue is ciphertext — must go through getEntries() to decrypt
+        loadEntries();
         loadStorageInfo();
+      }
+      if (changes['copyflow_quota_exceeded']?.newValue) {
+        setQuotaExceeded(true);
+        chrome.storage.local.remove('copyflow_quota_exceeded').catch(() => {});
       }
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
-  }, []);
+  }, [isLocked]);
+
+  async function checkLockState() {
+    const [s, flags] = await Promise.all([getSettings(), getFeatureFlags()]);
+    setSettings(s);
+    setFeatureFlags(flags);
+    if (!s.passwordEnabled) {
+      setIsLocked(false);
+      return;
+    }
+    const unlocked = await isUnlocked();
+    setIsLocked(!unlocked);
+  }
 
   async function loadEntries() {
     const data = await getEntries();
@@ -74,9 +129,124 @@ export default function App() {
     setStorageInfo(info);
   }
 
+  async function handleUnlock(password: string): Promise<boolean> {
+    const response = await chrome.runtime.sendMessage({
+      type: 'UNLOCK_EXTENSION',
+      password,
+    });
+    if (response?.success) {
+      setIsLocked(false);
+      return true;
+    }
+    return false;
+  }
+
+  async function handleLock() {
+    await chrome.runtime.sendMessage({ type: 'LOCK_EXTENSION' });
+    setIsLocked(true);
+    setEntries([]);
+  }
+
+  function handleStateChange() {
+    // Re-check everything after password enable/disable/change
+    checkLockState();
+    loadEntries();
+    loadStorageInfo();
+    setView('main');
+  }
+
+  // --- Loading state ---
+  if (isLocked === null || settings === null || featureFlags === null) {
+    return (
+      <Stack align="center" justify="center" style={{ height: '100%' }}>
+        <Loader size="sm" />
+      </Stack>
+    );
+  }
+
+  // --- Lock screen ---
+  if (isLocked) {
+    return <LockScreen onUnlock={handleUnlock} isSetup={false} />;
+  }
+
+  // --- Password settings view ---
+  if (view === 'passwordSettings') {
+    return (
+      <PasswordSettings
+        passwordEnabled={settings.passwordEnabled}
+        autoLockMinutes={settings.autoLockMinutes}
+        onClose={() => setView('main')}
+        onStateChange={handleStateChange}
+      />
+    );
+  }
+
+  // --- Main content ---
+  return (
+    <MainContent
+      entries={entries}
+      search={search}
+      setSearch={setSearch}
+      copiedId={copiedId}
+      setCopiedId={setCopiedId}
+      storageInfo={storageInfo}
+      quotaExceeded={quotaExceeded}
+      colorScheme={colorScheme}
+      toggleColorScheme={toggleColorScheme}
+      passwordEnabled={settings.passwordEnabled}
+      snippetsEnabled={featureFlags.snippetsEnabled}
+      tab={tab}
+      onTabChange={setTab}
+      onLock={handleLock}
+      onOpenPasswordSettings={() => setView('passwordSettings')}
+      loadEntries={loadEntries}
+    />
+  );
+}
+
+// ---- Main Content Component ----
+
+interface MainContentProps {
+  entries: ClipboardEntry[];
+  search: string;
+  setSearch: (s: string) => void;
+  copiedId: string | null;
+  setCopiedId: (id: string | null) => void;
+  storageInfo: { bytesUsed: number; totalEntries: number };
+  quotaExceeded: boolean;
+  colorScheme: string;
+  toggleColorScheme: () => void;
+  passwordEnabled: boolean;
+  snippetsEnabled: boolean;
+  tab: Tab;
+  onTabChange: (tab: Tab) => void;
+  onLock: () => void;
+  onOpenPasswordSettings: () => void;
+  loadEntries: () => Promise<void>;
+}
+
+function MainContent({
+  entries,
+  search,
+  setSearch,
+  copiedId,
+  setCopiedId,
+  storageInfo,
+  quotaExceeded,
+  colorScheme,
+  toggleColorScheme,
+  passwordEnabled,
+  snippetsEnabled,
+  tab,
+  onTabChange,
+  onLock,
+  onOpenPasswordSettings,
+  loadEntries,
+}: MainContentProps) {
+  const quotaPercent = storageInfo.bytesUsed / STORAGE_QUOTA_BYTES;
   // Filter entries by search
   const filtered = entries.filter((e) =>
-    e.content.toLowerCase().includes(search.toLowerCase())
+    e.content.toLowerCase().includes(search.toLowerCase()),
   );
 
   // Split into pinned + unpinned
@@ -194,6 +364,13 @@ export default function App() {
           </Group>
           <Group gap={4}>
             <Badge variant="light" size="sm">{entries.length}</Badge>
+            {passwordEnabled && (
+              <Tooltip label="Lock">
+                <ActionIcon variant="subtle" size="sm" onClick={onLock}>
+                  <IconLock size={14} />
+                </ActionIcon>
+              </Tooltip>
+            )}
             <Tooltip label={isDark ? 'Light mode' : 'Dark mode'}>
               <ActionIcon
                 variant="subtle"
@@ -203,13 +380,20 @@ export default function App() {
                 {isDark ? <IconSun size={14} /> : <IconMoon size={14} />}
               </ActionIcon>
             </Tooltip>
-            <Menu shadow="md" width={180} position="bottom-end">
+            <Menu shadow="md" width={200} position="bottom-end">
               <Menu.Target>
                 <ActionIcon variant="subtle" size="sm">
                   <IconDots size={14} />
                 </ActionIcon>
               </Menu.Target>
               <Menu.Dropdown>
+                <Menu.Item
+                  leftSection={<IconShieldLock size={14} />}
+                  onClick={onOpenPasswordSettings}
+                >
+                  Password & Encryption
+                </Menu.Item>
+                <Menu.Divider />
                 <Menu.Item
                   leftSection={<IconDownload size={14} />}
                   onClick={handleExport}
@@ -237,23 +421,45 @@ export default function App() {
           </Group>
         </Group>
 
-        <TextInput
-          placeholder="Search clips..."
-          leftSection={<IconSearch size={16} />}
-          rightSection={
-            search ? (
-              <ActionIcon variant="subtle" size="xs" onClick={() => setSearch('')}>
-                <IconX size={12} />
-              </ActionIcon>
-            ) : null
-          }
-          value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
-          size="sm"
+        <SegmentedControl
+          value={tab}
+          onChange={(v) => onTabChange(v as Tab)}
+          data={[
+            { label: 'Clips', value: 'clips' },
+            { label: 'Snippets', value: 'snippets' },
+          ]}
+          size="xs"
+          fullWidth
         />
+
+        {tab === 'clips' && (
+          <TextInput
+            placeholder="Search clips..."
+            leftSection={<IconSearch size={16} />}
+            rightSection={
+              search ? (
+                <ActionIcon variant="subtle" size="xs" onClick={() => setSearch('')}>
+                  <IconX size={12} />
+                </ActionIcon>
+              ) : null
+            }
+            value={search}
+            onChange={(e) => setSearch(e.currentTarget.value)}
+            size="sm"
+            mt="xs"
+          />
+        )}
       </Box>
 
+      {/* Snippets tab */}
+      {tab === 'snippets' && (
+        <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <SnippetsPanel snippetsEnabled={snippetsEnabled} />
+        </Box>
+      )}
+
       {/* Clip list */}
+      {tab === 'clips' && (
       <ScrollArea px="md" py="xs" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {filtered.length === 0 ? (
           <Stack align="center" justify="center" py="xl" gap="xs">
@@ -319,6 +525,7 @@ export default function App() {
           </Stack>
         )}
       </ScrollArea>
+      )}
 
       {/* Footer — storage info */}
       <Box
@@ -334,6 +541,16 @@ export default function App() {
             CopyFlow v0.1.0
           </Text>
         </Group>
+        {quotaExceeded && (
+          <Text size="xs" c="red" mt={2}>
+            ⚠ Storage full — export or delete old clips
+          </Text>
+        )}
+        {!quotaExceeded && quotaPercent >= STORAGE_QUOTA_WARN_THRESHOLD && (
+          <Text size="xs" c={quotaPercent >= 0.95 ? 'red' : 'orange'} mt={2}>
+            ⚠ Storage {Math.round(quotaPercent * 100)}% full — export or delete old clips
+          </Text>
+        )}
       </Box>
     </Stack>
   );

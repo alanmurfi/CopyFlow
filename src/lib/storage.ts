@@ -2,81 +2,292 @@
 // CopyFlow — Chrome Storage Wrapper
 // ============================================
 
-import type { ClipboardEntry, Folder, Settings, DEFAULT_SETTINGS } from '../types';
+import type { ClipboardEntry, Folder, Settings, EncryptedEntry, EncryptionMeta } from '../types';
+import { DEFAULT_SETTINGS } from '../types';
+import { encryptPayload, decryptPayload, hashContent } from './crypto';
+import { getSessionKey, isUnlocked } from './session';
 
 const STORAGE_KEYS = {
   entries: 'copyflow_entries',
   folders: 'copyflow_folders',
   settings: 'copyflow_settings',
   lastClipboard: 'copyflow_last_clipboard',
+  encryptionMeta: 'copyflow_encryption_meta',
+  quotaExceeded: 'copyflow_quota_exceeded',
 } as const;
 
 // --- Constants ---
 
 const MAX_ENTRY_SIZE_BYTES = 500 * 1024; // 500 KB per entry
 
-// --- Entries ---
+export const STORAGE_QUOTA_BYTES = 5_242_880; // 5 MB chrome.storage.local limit
+export const STORAGE_QUOTA_WARN_THRESHOLD = 0.8; // Warn at 80% usage
 
-export async function getEntries(): Promise<ClipboardEntry[]> {
+// Allowed MIME types for image data URIs (SVG excluded to prevent embedded script payloads)
+const ALLOWED_IMAGE_DATA_PREFIXES = ['data:image/png', 'data:image/jpeg', 'data:image/gif', 'data:image/webp'];
+
+function isValidImageDataUrl(url: string): boolean {
+  return ALLOWED_IMAGE_DATA_PREFIXES.some((prefix) => url.startsWith(prefix));
+}
+
+// --- Storage Mutex ---
+// chrome.storage.local get+set is not atomic. A promise-based mutex serializes
+// all read-modify-write operations on entries to prevent concurrent overwrites.
+
+let _entryMutex: Promise<void> = Promise.resolve();
+
+function withEntryLock<T>(fn: () => Promise<T>): Promise<T> {
+  let release: () => void;
+  const next = new Promise<void>((r) => { release = r; });
+  const wait = _entryMutex;
+  _entryMutex = next;
+  return wait.then(fn).finally(() => release!());
+}
+
+// --- Encryption helpers ---
+
+export async function getEncryptionMeta(): Promise<EncryptionMeta | null> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.encryptionMeta);
+  return result[STORAGE_KEYS.encryptionMeta] ?? null;
+}
+
+export async function setEncryptionMeta(meta: EncryptionMeta): Promise<void> {
+  await chrome.storage.local.set({ [STORAGE_KEYS.encryptionMeta]: meta });
+}
+
+export async function removeEncryptionMeta(): Promise<void> {
+  await chrome.storage.local.remove(STORAGE_KEYS.encryptionMeta);
+}
+
+export async function isEncryptionEnabled(): Promise<boolean> {
+  return (await getEncryptionMeta()) !== null;
+}
+
+// Encrypt sensitive fields of an entry into a single ciphertext blob
+async function encryptEntry(entry: ClipboardEntry, key: CryptoKey): Promise<EncryptedEntry> {
+  const sensitivePayload = JSON.stringify({
+    content: entry.content,
+    imageDataUrl: entry.imageDataUrl,
+    sourceUrl: entry.sourceUrl,
+    sourceTitle: entry.sourceTitle,
+  });
+  const { iv, ciphertext } = await encryptPayload(key, sensitivePayload);
+  return {
+    id: entry.id,
+    type: entry.type,
+    timestamp: entry.timestamp,
+    pinned: entry.pinned,
+    folderId: entry.folderId,
+    encrypted: { iv, ciphertext },
+  };
+}
+
+// Decrypt an encrypted entry back to a full ClipboardEntry
+async function decryptEntry(entry: EncryptedEntry, key: CryptoKey): Promise<ClipboardEntry> {
+  const json = await decryptPayload(key, entry.encrypted.iv, entry.encrypted.ciphertext);
+  const sensitive = JSON.parse(json);
+  return {
+    id: entry.id,
+    type: entry.type,
+    timestamp: entry.timestamp,
+    pinned: entry.pinned,
+    folderId: entry.folderId,
+    content: sensitive.content,
+    imageDataUrl: sensitive.imageDataUrl,
+    sourceUrl: sensitive.sourceUrl,
+    sourceTitle: sensitive.sourceTitle,
+  };
+}
+
+// Check if a raw storage entry is encrypted (has .encrypted field)
+function isEncryptedEntry(e: any): e is EncryptedEntry {
+  return e && typeof e === 'object' && e.encrypted && typeof e.encrypted.iv === 'string';
+}
+
+// Read raw entries from storage without decryption
+async function getRawEntries(): Promise<any[]> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.entries);
   return result[STORAGE_KEYS.entries] ?? [];
 }
 
-export async function addEntry(entry: ClipboardEntry): Promise<void> {
-  // Reject oversized entries
-  if (entry.content && entry.content.length > MAX_ENTRY_SIZE_BYTES) {
-    console.debug('CopyFlow: Entry too large, skipping');
-    return;
+// Write raw entries to storage (already in final form — plaintext or encrypted)
+async function setRawEntries(entries: any[]): Promise<void> {
+  await chrome.storage.local.set({ [STORAGE_KEYS.entries]: entries });
+}
+
+// --- Entries ---
+
+export async function getEntries(): Promise<ClipboardEntry[]> {
+  const raw = await getRawEntries();
+  if (raw.length === 0) return [];
+
+  const encEnabled = await isEncryptionEnabled();
+  if (!encEnabled) {
+    return raw as ClipboardEntry[];
   }
 
-  const entries = await getEntries();
-
-  // Deduplicate: don't add if same content as most recent
-  if (entries.length > 0 && entries[0].content === entry.content && entries[0].type === entry.type) {
-    return;
+  // Encryption is enabled — need the session key
+  const key = await getSessionKey();
+  if (!key) {
+    // Locked — return empty (caller should check isUnlocked() first)
+    return [];
   }
 
-  // Add to front (newest first)
-  entries.unshift(entry);
-
-  // Enforce max entries limit
-  const settings = await getSettings();
-  const maxEntries = Math.max(settings.maxEntries || 500, 1); // floor at 1 to prevent loop
-  while (entries.length > maxEntries) {
-    // Remove oldest unpinned entry
-    const lastUnpinnedIndex = entries.findLastIndex((e) => !e.pinned);
-    if (lastUnpinnedIndex !== -1) {
-      entries.splice(lastUnpinnedIndex, 1);
+  const decrypted: ClipboardEntry[] = [];
+  for (const entry of raw) {
+    if (isEncryptedEntry(entry)) {
+      try {
+        decrypted.push(await decryptEntry(entry, key));
+      } catch (err) {
+        console.error('CopyFlow: Failed to decrypt entry', entry.id, err);
+        // Skip corrupted entries rather than crashing
+      }
     } else {
-      // All pinned — remove last anyway
-      entries.pop();
+      // Plaintext entry in encrypted store (shouldn't happen, but handle gracefully)
+      decrypted.push(entry as ClipboardEntry);
     }
   }
-
-  try {
-    await chrome.storage.local.set({ [STORAGE_KEYS.entries]: entries });
-  } catch (err) {
-    console.error('CopyFlow: Storage write failed (quota?):', err);
-  }
+  return decrypted;
 }
 
-export async function deleteEntry(id: string): Promise<void> {
-  const entries = await getEntries();
-  const filtered = entries.filter((e) => e.id !== id);
-  await chrome.storage.local.set({ [STORAGE_KEYS.entries]: filtered });
+export function addEntry(entry: ClipboardEntry): Promise<void> {
+  return withEntryLock(async () => {
+    // Reject oversized entries
+    if (entry.content && entry.content.length > MAX_ENTRY_SIZE_BYTES) {
+      console.debug('CopyFlow: Entry too large, skipping');
+      return;
+    }
+
+    // Validate imageDataUrl if present
+    if (entry.imageDataUrl != null && !isValidImageDataUrl(entry.imageDataUrl)) {
+      entry = { ...entry, imageDataUrl: undefined };
+    }
+
+    const encEnabled = await isEncryptionEnabled();
+    const key = encEnabled ? await getSessionKey() : null;
+
+    if (encEnabled && !key) {
+      // Locked — cannot encrypt. Drop the entry silently.
+      console.debug('CopyFlow: Locked, skipping new entry');
+      return;
+    }
+
+    // Read existing entries (decrypted if encrypted)
+    const entries = await getEntries();
+
+    // Deduplicate: don't add if same content as most recent
+    if (entries.length > 0 && entries[0].content === entry.content && entries[0].type === entry.type) {
+      return;
+    }
+
+    // Add to front (newest first)
+    entries.unshift(entry);
+
+    // Enforce max entries limit
+    const settings = await getSettings();
+    const maxEntries = Math.max(settings.maxEntries || 500, 1); // floor at 1 to prevent loop
+    while (entries.length > maxEntries) {
+      // Remove oldest unpinned entry
+      const lastUnpinnedIndex = entries.findLastIndex((e) => !e.pinned);
+      if (lastUnpinnedIndex !== -1) {
+        entries.splice(lastUnpinnedIndex, 1);
+      } else {
+        // All pinned — remove last anyway
+        entries.pop();
+      }
+    }
+
+    try {
+      if (encEnabled && key) {
+        const encrypted = await Promise.all(entries.map((e) => encryptEntry(e, key)));
+        await setRawEntries(encrypted);
+      } else {
+        await setRawEntries(entries);
+      }
+    } catch (err) {
+      console.error('CopyFlow: Storage write failed (quota?):', err);
+      // Signal quota exceeded so the UI can warn the user
+      await chrome.storage.local.set({ [STORAGE_KEYS.quotaExceeded]: true }).catch(() => {});
+    }
+  });
 }
 
-export async function updateEntry(id: string, updates: Partial<ClipboardEntry>): Promise<void> {
-  const entries = await getEntries();
-  const index = entries.findIndex((e) => e.id === id);
-  if (index !== -1) {
-    entries[index] = { ...entries[index], ...updates };
-    await chrome.storage.local.set({ [STORAGE_KEYS.entries]: entries });
-  }
+export function deleteEntry(id: string): Promise<void> {
+  return withEntryLock(async () => {
+    // id is plaintext even when encrypted — filter on raw storage
+    const raw = await getRawEntries();
+    const filtered = raw.filter((e: any) => e.id !== id);
+    await setRawEntries(filtered);
+  });
+}
+
+export function deleteEntries(ids: string[]): Promise<void> {
+  return withEntryLock(async () => {
+    const raw = await getRawEntries();
+    const idSet = new Set(ids);
+    const filtered = raw.filter((e: any) => !idSet.has(e.id));
+    await setRawEntries(filtered);
+  });
+}
+
+export function updateEntry(id: string, updates: Partial<ClipboardEntry>): Promise<void> {
+  return withEntryLock(async () => {
+    const encEnabled = await isEncryptionEnabled();
+    const key = encEnabled ? await getSessionKey() : null;
+
+    if (encEnabled && !key) {
+      console.debug('CopyFlow: Locked, cannot update entry');
+      return;
+    }
+
+    // Must decrypt, merge, re-encrypt
+    const entries = await getEntries();
+    const index = entries.findIndex((e) => e.id === id);
+    if (index !== -1) {
+      entries[index] = { ...entries[index], ...updates };
+      if (encEnabled && key) {
+        const encrypted = await Promise.all(entries.map((e) => encryptEntry(e, key)));
+        await setRawEntries(encrypted);
+      } else {
+        await setRawEntries(entries);
+      }
+    }
+  });
 }
 
 export async function clearAllEntries(): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_KEYS.entries]: [] });
+  // No mutex needed — unconditional overwrite, not read-modify-write
+  await setRawEntries([]);
+}
+
+// --- Migration ---
+
+export async function migrateToEncrypted(key: CryptoKey): Promise<void> {
+  return withEntryLock(async () => {
+    const raw = await getRawEntries();
+    const plaintext = raw as ClipboardEntry[];
+    const encrypted = await Promise.all(plaintext.map((e) => encryptEntry(e, key)));
+    await setRawEntries(encrypted);
+  });
+}
+
+export async function migrateToPlaintext(key: CryptoKey): Promise<void> {
+  return withEntryLock(async () => {
+    const raw = await getRawEntries();
+    const decrypted: ClipboardEntry[] = [];
+    for (const entry of raw) {
+      if (isEncryptedEntry(entry)) {
+        try {
+          decrypted.push(await decryptEntry(entry, key));
+        } catch (err) {
+          console.error('CopyFlow: Failed to decrypt during migration', entry.id, err);
+        }
+      } else {
+        decrypted.push(entry as ClipboardEntry);
+      }
+    }
+    await setRawEntries(decrypted);
+  });
 }
 
 // --- Folders ---
@@ -98,23 +309,21 @@ export async function deleteFolder(id: string): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEYS.folders]: filtered });
 
   // Remove folder assignment from entries
-  const entries = await getEntries();
-  const updated = entries.map((e) =>
-    e.folderId === id ? { ...e, folderId: undefined } : e
-  );
-  await chrome.storage.local.set({ [STORAGE_KEYS.entries]: updated });
+  // For encrypted entries, folderId is plaintext so we can update raw storage
+  await withEntryLock(async () => {
+    const raw = await getRawEntries();
+    const updated = raw.map((e: any) =>
+      e.folderId === id ? { ...e, folderId: undefined } : e,
+    );
+    await setRawEntries(updated);
+  });
 }
 
 // --- Settings ---
 
 export async function getSettings(): Promise<Settings> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.settings);
-  return result[STORAGE_KEYS.settings] ?? {
-    theme: 'system',
-    maxEntries: 500,
-    autoDeleteDays: 30,
-    keyboardShortcutEnabled: true,
-  };
+  return { ...DEFAULT_SETTINGS, ...(result[STORAGE_KEYS.settings] ?? {}) };
 }
 
 export async function updateSettings(updates: Partial<Settings>): Promise<void> {
@@ -131,20 +340,38 @@ export async function getLastClipboard(): Promise<string | null> {
 }
 
 export async function setLastClipboard(content: string): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_KEYS.lastClipboard]: content });
+  // When encryption is enabled, store a hash to prevent plaintext leakage
+  const encEnabled = await isEncryptionEnabled();
+  const value = encEnabled ? await hashContent(content) : content;
+  await chrome.storage.local.set({ [STORAGE_KEYS.lastClipboard]: value });
+}
+
+// Compare clipboard content against stored last clipboard value.
+// Handles both plaintext and hashed modes.
+export async function isLastClipboard(content: string): Promise<boolean> {
+  const stored = await getLastClipboard();
+  if (stored === null) return false;
+
+  const encEnabled = await isEncryptionEnabled();
+  if (encEnabled) {
+    const hash = await hashContent(content);
+    return hash === stored;
+  }
+  return content === stored;
 }
 
 // --- Storage stats ---
 
 export async function getStorageUsage(): Promise<{ bytesUsed: number; totalEntries: number }> {
   const bytesUsed = await chrome.storage.local.getBytesInUse();
-  const entries = await getEntries();
-  return { bytesUsed, totalEntries: entries.length };
+  const raw = await getRawEntries();
+  return { bytesUsed, totalEntries: raw.length };
 }
 
 // --- Export / Import ---
 
 export async function exportData(): Promise<string> {
+  // Always export decrypted data (portable backups not tied to a password)
   const entries = await getEntries();
   const folders = await getFolders();
   const settings = await getSettings();
@@ -162,7 +389,7 @@ function isValidEntry(e: unknown): e is ClipboardEntry {
     typeof entry.timestamp === 'number' && entry.timestamp > 0 &&
     typeof entry.pinned === 'boolean' &&
     (entry.imageDataUrl === undefined || entry.imageDataUrl === null ||
-      (typeof entry.imageDataUrl === 'string' && entry.imageDataUrl.startsWith('data:image/'))) &&
+      (typeof entry.imageDataUrl === 'string' && isValidImageDataUrl(entry.imageDataUrl))) &&
     (entry.sourceUrl === undefined || entry.sourceUrl === null || typeof entry.sourceUrl === 'string') &&
     (entry.sourceTitle === undefined || entry.sourceTitle === null || typeof entry.sourceTitle === 'string')
   );
@@ -177,6 +404,7 @@ function sanitizeSettings(raw: unknown): Partial<Settings> {
   if (typeof s.maxEntries === 'number' && s.maxEntries >= 1 && s.maxEntries <= 10000) safe.maxEntries = s.maxEntries;
   if (typeof s.autoDeleteDays === 'number' && s.autoDeleteDays >= 0 && s.autoDeleteDays <= 365) safe.autoDeleteDays = s.autoDeleteDays;
   if (typeof s.keyboardShortcutEnabled === 'boolean') safe.keyboardShortcutEnabled = s.keyboardShortcutEnabled;
+  // Never import passwordEnabled or autoLockMinutes from backups (security)
   return safe;
 }
 
@@ -189,21 +417,37 @@ export async function importData(json: string): Promise<{ entriesImported: numbe
   // Validate each entry against schema — reject invalid ones
   const validEntries = data.entries.filter(isValidEntry);
 
-  // Merge: add imported entries that don't already exist (by content match)
-  const existing = await getEntries();
-  const existingContents = new Set(existing.map((e) => e.content));
-  const newEntries = validEntries.filter((e) => !existingContents.has(e.content));
+  const encEnabled = await isEncryptionEnabled();
+  const key = encEnabled ? await getSessionKey() : null;
 
-  // Enforce max entries after merge
-  const settings = await getSettings();
-  const maxEntries = Math.max(settings.maxEntries || 500, 1);
-  const merged = [...existing, ...newEntries].slice(0, maxEntries);
-
-  try {
-    await chrome.storage.local.set({ [STORAGE_KEYS.entries]: merged });
-  } catch (err) {
-    throw new Error('Import failed: storage quota exceeded');
+  if (encEnabled && !key) {
+    throw new Error('Extension is locked. Unlock before importing.');
   }
+
+  // Merge within entry lock to prevent races with polling
+  const newCount = await withEntryLock(async () => {
+    const existing = await getEntries();
+    const existingContents = new Set(existing.map((e) => e.content));
+    const newEntries = validEntries.filter((e) => !existingContents.has(e.content));
+
+    // Enforce max entries after merge
+    const settings = await getSettings();
+    const maxEntries = Math.max(settings.maxEntries || 500, 1);
+    const merged = [...existing, ...newEntries].slice(0, maxEntries);
+
+    try {
+      if (encEnabled && key) {
+        const encrypted = await Promise.all(merged.map((e) => encryptEntry(e, key)));
+        await setRawEntries(encrypted);
+      } else {
+        await setRawEntries(merged);
+      }
+    } catch (err) {
+      throw new Error('Import failed: storage quota exceeded');
+    }
+
+    return newEntries.length;
+  });
 
   // Import settings if present — sanitize each field
   if (data.settings) {
@@ -213,5 +457,5 @@ export async function importData(json: string): Promise<{ entriesImported: numbe
     }
   }
 
-  return { entriesImported: newEntries.length };
+  return { entriesImported: newCount };
 }
