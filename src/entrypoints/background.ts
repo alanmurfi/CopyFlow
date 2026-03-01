@@ -109,14 +109,18 @@ export default defineBackground(() => {
 
       const tabInfo = await getActiveTabInfo();
 
+      // Only record source metadata for real web pages — not chrome:// or other internal URLs
+      const isWebUrl = (url?: string) =>
+        typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'));
+
       const entry: ClipboardEntry = {
         id: uuidv4(),
         content: response.content,
         type: response.type || 'text',
         imageDataUrl: response.imageDataUrl,
         timestamp: Date.now(),
-        sourceUrl: tabInfo.url,
-        sourceTitle: tabInfo.title,
+        sourceUrl: isWebUrl(tabInfo.url) ? tabInfo.url : undefined,
+        sourceTitle: isWebUrl(tabInfo.url) ? tabInfo.title : undefined,
         pinned: false,
       };
 
@@ -243,6 +247,13 @@ export default defineBackground(() => {
     const entry = entries.find((e) => e.id === entryId);
 
     if (entry && tab?.id) {
+      // Only paste into real web pages — content scripts don't run on internal pages
+      const url = tab.url ?? '';
+      if (!url.startsWith('https://') && !url.startsWith('http://')) {
+        console.debug('CopyFlow: Skipping paste on non-web page:', url);
+        return;
+      }
+
       // Insert text into the focused field via content script
       chrome.tabs.sendMessage(tab.id, {
         type: 'COPYFLOW_INSERT_TEXT',
@@ -460,10 +471,14 @@ export default defineBackground(() => {
   cleanupOldEntries();
   setInterval(cleanupOldEntries, CLEANUP_INTERVAL);
 
-  // Rebuild context menus when storage changes
+  // Rebuild context menus when storage changes; re-arm auto-lock when settings change
   chrome.storage.onChanged.addListener((changes) => {
     if (changes['copyflow_entries']) {
       rebuildContextMenus();
+    }
+    if (changes['copyflow_settings']) {
+      // Re-arm the auto-lock timer so the new autoLockMinutes value takes effect immediately
+      resetAutoLockTimer();
     }
   });
 
