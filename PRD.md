@@ -1,8 +1,8 @@
 # Product Requirements Document — CopyFlow
 
-**Document Version:** 1.1
-**Last Updated:** 2026-03-01
-**Product Version:** v0.1.0 (current), targeting v0.2.0
+**Document Version:** 1.2
+**Last Updated:** 2026-03-02
+**Product Version:** v0.2.0 (current)
 **Owner:** Solo Developer
 **Status:** Active Development
 
@@ -163,27 +163,32 @@
 | Auto-cleanup | P2 | ✅ Shipped | Delete unpinned after 30 days |
 | Keyboard shortcut | P2 | ✅ Shipped | Alt+Shift+V opens popup |
 
-### v0.2.0 Features (In Progress)
+### v0.2.0 Features (Current)
 
 | Feature | Priority | Status | Target | Description |
 |---------|----------|--------|--------|-------------|
 | Password encryption | P0 | ✅ Shipped | 2026-03 | AES-256-GCM encryption |
 | Auto-lock | P1 | ✅ Shipped | 2026-03 | Lock after inactivity |
 | Lock screen | P0 | ✅ Shipped | 2026-03 | Password entry UI |
-| Unit tests | P0 | 🚧 In Progress | 2026-03 | Crypto + storage tests |
-| Storage quota alerts | P1 | 📋 Planned | 2026-03 | Warn before quota exceeded |
-| CSP headers | P1 | 📋 Planned | 2026-03 | Content Security Policy |
-| Domain paste warnings | P2 | 📋 Planned | 2026-04 | Warn on paste to non-HTTPS |
+| Text snippets | P1 | ✅ Shipped | 2026-03 | Template variables, text expander |
+| Folders | P1 | ✅ Shipped | 2026-03 | Organize clips by folder |
+| Image capture | P1 | ✅ Shipped | 2026-03 | Clipboard image capture + compression |
+| Onboarding | P2 | ✅ Shipped | 2026-03 | Welcome page on first install |
+| Keyboard shortcuts | P2 | ✅ Shipped | 2026-03 | j/k nav, p pin, d delete, e edit |
+| Storage quota alerts | P1 | ✅ Shipped | 2026-03 | Badge + UI warning before quota exceeded |
+| CSP headers | P1 | ✅ Shipped | 2026-03 | Content Security Policy in manifest |
+| Insecure paste warnings | P2 | ✅ Shipped | 2026-03 | Warn + confirm on paste to HTTP pages |
+| Feature flags | P2 | ✅ Shipped | 2026-03 | Toggle features (snippets) |
+| Unit tests | P0 | 🚧 In Progress | 2026-03 | Crypto, storage, session, features, snippets |
 
 ### v0.3.0 Features (Planned)
 
 | Feature | Priority | Status | Target | Description |
 |---------|----------|--------|--------|-------------|
-| Folders/Collections | P1 | 💡 Ideation | 2026-05 | Organize clips by project |
 | Smart detection | P2 | 💡 Ideation | 2026-05 | Auto-tag URLs, emails, code |
-| Image compression | P2 | 💡 Ideation | 2026-06 | Reduce image storage size |
 | Encrypted sync | P2 | 💡 Ideation | 2026-07 | E2E encrypted Chrome sync |
-| Keyboard shortcuts | P2 | 💡 Ideation | 2026-06 | Pin/delete/copy shortcuts |
+| UI tests | P1 | 📋 Planned | 2026-05 | React component + integration tests |
+| HTTPS paste warnings | P2 | 📋 Planned | 2026-05 | Domain validation for secure pages |
 
 ### Future / Nice-to-Have
 
@@ -334,7 +339,7 @@
 | Rate limiting | Exponential backoff, 10 attempts max | ✅ Implemented |
 | XSS prevention | SVG blocking, BiDi sanitization | ✅ Implemented |
 | Sender validation | Extension page only, no content scripts | ✅ Implemented |
-| CSP headers | Restrict unsafe-inline, unsafe-eval | ⏳ Planned v0.2 |
+| CSP headers | Restrict unsafe-inline, unsafe-eval | ✅ Implemented |
 | No external network | 0 HTTP requests | ✅ Verified |
 
 ### Compatibility
@@ -390,20 +395,17 @@
 ## Open Questions
 
 ### Product Questions
-1. **Should we support clipboard images?**
-   - Current: Limited support (data URIs, no compression)
-   - Issue: Large images hit storage quota fast
-   - Decision: Keep basic image support, add compression in v0.3
+1. ~~**Should we support clipboard images?**~~
+   - Resolved: Image capture shipped in v0.2.0 with JPEG compression (max 1400px, 82% quality)
+   - Large images still consume quota fast — consider further optimization
 
 2. **Freemium vs fully free?**
    - Current: Free during v0.x
    - Question: Can we sustain development without revenue?
    - Decision: Introduce optional Pro tier in v1.0 (cloud sync only)
 
-3. **Folder/tag organization?**
-   - Current: Flat list + search
-   - User request: Organize by project/topic
-   - Decision: Implement folders in v0.3 (data model ready, need UI)
+3. ~~**Folder/tag organization?**~~
+   - Resolved: Folders shipped in v0.2.0 (create, assign, filter by folder)
 
 ### Technical Questions
 4. **How to handle password reset?**
@@ -427,14 +429,15 @@
 ### Q1 2026 (Current)
 - ✅ v0.1.0 shipped (2026-01-15)
 - ✅ Security hardening (2026-03-01)
-- 🚧 v0.2.0 in progress (encryption, tests)
-- Target: v0.2.0 launch by 2026-03-15
+- ✅ v0.2.0 feature-complete (encryption, snippets, folders, images, onboarding)
+- 🚧 Finishing unit tests
+- Target: v0.2.0 public launch by 2026-03-15
 
 ### Q2 2026
-- v0.2.0 public launch (April)
+- v0.2.0 public launch
 - Marketing push (Hacker News, ProductHunt)
 - Community feedback → v0.2.1 bugfixes
-- v0.3.0 planning (folders feature)
+- v0.3.0 planning (smart detection, encrypted sync)
 
 ### Q3 2026
 - v0.3.0 launch (folders, smart detection)

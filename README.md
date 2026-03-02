@@ -22,19 +22,22 @@ Most clipboard managers ask for permissions they don't need — browsing history
 | Feature | Description |
 |---|---|
 | **Auto-save** | Every Ctrl+C / Cmd+C is automatically saved |
+| **Image capture** | Copied images are captured, compressed, and stored |
 | **Search** | Find any clip instantly with real-time search |
 | **Pin** | Keep your most-used clips at the top |
 | **Edit** | Fix typos or tweak saved clips inline |
+| **Folders** | Organize clips into color-coded folders |
 | **Right-click paste** | Paste from your history via the context menu |
+| **Insecure paste warning** | Warns before pasting on HTTP pages |
 | **Copy toast** | Visual confirmation on screen every time you copy |
 | **Export / Import** | Back up your clips as JSON, restore on any machine |
 | **AES-256 encryption** | Optional password-based encryption with PBKDF2 key derivation |
 | **Auto-lock** | Automatically lock encrypted history after a configurable inactivity period |
 | **Text snippets** | Create shortcuts that expand to full snippets when typed |
-| **Storage monitoring** | Footer warning when storage approaches the 5 MB limit |
+| **Storage monitoring** | Badge + footer warning when storage approaches the 5 MB limit |
 | **Auto-cleanup** | Old unpinned clips are removed after 30 days |
 | **Dark mode** | Toggle between light and dark themes |
-| **Keyboard shortcut** | Alt+Shift+V opens CopyFlow instantly |
+| **Keyboard shortcuts** | Alt+Shift+V to open; j/k, /search, p pin, d delete, e edit in popup |
 
 ## Tech Stack
 
@@ -59,7 +62,7 @@ pnpm build
 # Run unit tests
 pnpm test
 
-# Production zip is at .output/copyflow-0.1.0-chrome.zip
+# Production zip is at .output/copyflow-0.2.0-chrome.zip
 ```
 
 ## Project Structure
@@ -67,23 +70,27 @@ pnpm test
 ```
 src/
 ├── entrypoints/
-│   ├── background.ts           # Service worker — clipboard polling, context menus, auto-lock
-│   ├── content.ts              # Content script — copy toast notification
-│   └── popup/
-│       ├── App.tsx             # Main popup UI
-│       ├── LockScreen.tsx      # Password entry with rate limiting
-│       ├── PasswordSettings.tsx # Encryption management
-│       ├── SnippetEditor.tsx   # Snippet create/edit form
-│       ├── SnippetsPanel.tsx   # Snippets management panel
-│       ├── index.html
-│       ├── main.tsx
-│       └── style.css
+│   ├── background.ts           # Service worker — clipboard polling, context menus, auto-lock, image compression, snippets
+│   ├── content.ts              # Content script — copy toast, insecure paste warning, image polling, text expander
+│   ├── popup/
+│   │   ├── App.tsx             # Main popup UI (clips, folders, image preview)
+│   │   ├── LockScreen.tsx      # Password entry with rate limiting
+│   │   ├── PasswordSettings.tsx # Encryption management
+│   │   ├── SnippetEditor.tsx   # Snippet create/edit form
+│   │   ├── SnippetsPanel.tsx   # Snippets management panel
+│   │   ├── FolderManager.tsx   # Folder CRUD UI
+│   │   ├── index.html
+│   │   ├── main.tsx
+│   │   └── style.css
+│   └── welcome/
+│       └── Welcome.tsx         # Onboarding page (shown on install)
 ├── lib/
 │   ├── crypto.ts               # AES-256-GCM + PBKDF2 primitives
 │   ├── features.ts             # Feature flags
 │   ├── session.ts              # Session key management (chrome.storage.session)
-│   ├── snippets.ts             # Text snippets storage
-│   └── storage.ts              # Chrome storage wrapper (entries, settings, export/import)
+│   ├── snippets.ts             # Text snippets storage + template resolution
+│   ├── storage.ts              # Chrome storage wrapper (entries, settings, export/import)
+│   └── *.test.ts               # Unit tests (crypto, storage, session, features, snippets)
 └── types/
     └── index.ts                # TypeScript interfaces
 public/
@@ -95,11 +102,14 @@ public/
 ## How It Works
 
 1. A **service worker** polls the clipboard every 1.5s via an **offscreen document** (required because MV3 service workers can't access the Clipboard API directly)
-2. The offscreen document uses `document.execCommand('paste')` with a hidden textarea to read clipboard contents
-3. New clips are deduplicated and stored in `chrome.storage.local`
-4. When encryption is enabled, each entry is AES-256-GCM encrypted before storage; the session key is kept in `chrome.storage.session` (cleared when the browser closes)
-5. A **content script** listens for native `copy` events and shows a toast notification
-6. The **popup** reads from storage and updates in real-time via `chrome.storage.onChanged`
+2. The offscreen document uses `document.execCommand('paste')` with a hidden textarea to read text clipboard contents
+3. **Image capture** uses `navigator.clipboard.read()` in the content script and popup (which have document focus), since the offscreen doc does not
+4. Images are compressed via `OffscreenCanvas` (resized to max 1400px, JPEG at 82% quality) before storage
+5. New clips are deduplicated and stored in `chrome.storage.local`
+6. When encryption is enabled, each entry is AES-256-GCM encrypted before storage; the session key is kept in `chrome.storage.session` (cleared when the browser closes)
+7. A **content script** listens for native `copy` events, shows a toast notification, monitors for image clipboard content, and runs the **text expander** (snippet shortcut detection)
+8. Context menu paste warns on HTTP pages with a confirmation dialog before inserting
+9. The **popup** reads from storage and updates in real-time via `chrome.storage.onChanged`
 
 ## Permissions Explained
 
