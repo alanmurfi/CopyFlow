@@ -46,7 +46,7 @@ PRIVACY FIRST
 
 PERMISSIONS EXPLAINED
 • clipboardRead/Write: Read and write to your clipboard (the core feature)
-• storage: Save your clip history locally on your device
+• storage/unlimitedStorage: Save your clip history locally on your device (unlimited storage for large image histories)
 • offscreen: Required by Chrome to access the clipboard in the background
 • activeTab/tabs: Record which page you copied from (shown as source info on each clip)
 • contextMenus: Right-click paste menu in text fields
