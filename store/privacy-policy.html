@@ -32,21 +32,32 @@
 </head>
 <body>
   <h1>CopyFlow Privacy Policy</h1>
-  <p class="updated">Last updated: March 1, 2026</p>
+  <p class="updated">Last updated: March 2, 2026</p>
 
   <div class="highlight">
     <strong>The short version:</strong> CopyFlow stores your clipboard history locally on your device. We do not collect, transmit, or sell any of your data. We have no servers. We have no analytics. We don't even have accounts.
   </div>
 
   <h2>What data CopyFlow stores</h2>
-  <p>CopyFlow saves the text you copy to your clipboard. Each saved clip includes:</p>
+  <p>CopyFlow saves the text and images you copy to your clipboard. Each saved clip includes:</p>
   <ul>
-    <li>The copied text content</li>
+    <li>The copied text or image content</li>
     <li>A timestamp of when it was copied</li>
     <li>The title and URL of the page you copied from (for your reference only)</li>
     <li>Whether you pinned or edited the clip</li>
+    <li>Folder assignment (if you organize clips into folders)</li>
   </ul>
   <p>All of this data is stored locally in your browser using Chrome's built-in storage API (<code>chrome.storage.local</code>). It never leaves your device.</p>
+
+  <h2>Optional encryption</h2>
+  <p>CopyFlow includes an optional password-based encryption feature. When enabled:</p>
+  <ul>
+    <li>All clipboard entries are encrypted on your device using AES-256-GCM before being saved to storage.</li>
+    <li>The encryption key is derived from your password using PBKDF2-SHA256 (600,000 iterations). Your password is never stored.</li>
+    <li>The derived key is kept in <code>chrome.storage.session</code> while the browser is open, and cleared automatically when the browser closes.</li>
+    <li>Without your password, the encrypted data cannot be read — not even by CopyFlow developers (we have no servers or access to your device).</li>
+  </ul>
+  <p>Encryption is entirely optional. If you don't set a password, your clips are stored in plaintext locally.</p>
 
   <h2>What data CopyFlow does NOT collect</h2>
   <ul>
@@ -61,11 +72,10 @@
   <p>CopyFlow requests only the permissions it needs to function:</p>
   <ul>
     <li><strong>clipboardRead / clipboardWrite</strong> — Read your clipboard to save history, and write to it when you click a clip to copy it.</li>
-    <li><strong>storage</strong> — Save your clipboard history locally in your browser.</li>
+    <li><strong>storage / unlimitedStorage</strong> — Save your clipboard history locally in your browser, with enough space for large image histories.</li>
     <li><strong>offscreen</strong> — Chrome requires this to access the clipboard from a background process.</li>
     <li><strong>activeTab / tabs</strong> — Detect which page you copied from, so CopyFlow can show the source next to each clip.</li>
     <li><strong>contextMenus</strong> — Show your recent clips in the right-click menu for quick pasting.</li>
-    <li><strong>scripting</strong> — Insert text into form fields when you paste from the right-click menu.</li>
   </ul>
   <p>CopyFlow does <strong>not</strong> request access to your browsing history, bookmarks, downloads, or any data beyond what is listed above.</p>
 
