@@ -247,7 +247,8 @@ export default function PasswordSettings({
   }
 
   return (
-    <Stack gap="md" p="md" style={{ height: '100%', overflowY: 'auto' }}>
+    <div style={{ height: '100%', overflowY: 'auto' }}>
+    <Stack gap="md" p="md" pb="xl">
       <Group gap="xs">
         <Button
           variant="subtle"
@@ -336,6 +337,17 @@ export default function PasswordSettings({
           >
             Disable Encryption
           </Button>
+
+          {error && (
+            <Text size="xs" c="red" ta="center">
+              {error}
+            </Text>
+          )}
+          {success && (
+            <Text size="xs" c="green" ta="center">
+              {success}
+            </Text>
+          )}
         </>
       ) : step === 'warning' ? (
         <>
@@ -407,5 +419,6 @@ export default function PasswordSettings({
         </Text>
       )}
     </Stack>
+    </div>
   );
 }
