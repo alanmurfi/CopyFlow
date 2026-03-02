@@ -53,6 +53,7 @@ export default function PasswordSettings({
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [disablePassword, setDisablePassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -126,7 +127,7 @@ export default function PasswordSettings({
     setError('');
     setSuccess('');
 
-    if (!currentPassword) {
+    if (!disablePassword) {
       setError('Enter your current password');
       return;
     }
@@ -140,14 +141,14 @@ export default function PasswordSettings({
       }
 
       const salt = saltFromBase64(meta.salt);
-      const valid = await verifyPassword(currentPassword, salt, meta.passwordHash);
+      const valid = await verifyPassword(disablePassword, salt, meta.passwordHash);
       if (!valid) {
         setError('Wrong password');
         setLoading(false);
         return;
       }
 
-      const key = await deriveCryptoKey(currentPassword, salt);
+      const key = await deriveCryptoKey(disablePassword, salt);
 
       // Decrypt all entries and snippets back to plaintext
       await migrateToPlaintext(key);
@@ -161,7 +162,7 @@ export default function PasswordSettings({
       await updateSettings({ passwordEnabled: false, autoLockMinutes: 0 });
 
       setSuccess('Encryption disabled');
-      setCurrentPassword('');
+      setDisablePassword('');
       onStateChange();
     } catch (err) {
       console.error('CopyFlow: Disable encryption failed:', err);
@@ -317,15 +318,13 @@ export default function PasswordSettings({
             This will decrypt all your data and remove password protection.
           </Text>
 
-          {!newPassword && !confirmPassword && (
-            <PasswordInput
-              placeholder="Enter current password to disable"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.currentTarget.value)}
-              disabled={loading}
-              size="xs"
-            />
-          )}
+          <PasswordInput
+            placeholder="Enter current password to disable"
+            value={disablePassword}
+            onChange={(e) => setDisablePassword(e.currentTarget.value)}
+            disabled={loading}
+            size="xs"
+          />
 
           <Button
             size="xs"
@@ -333,7 +332,7 @@ export default function PasswordSettings({
             variant="light"
             onClick={handleDisable}
             loading={loading}
-            disabled={!currentPassword}
+            disabled={!disablePassword}
           >
             Disable Encryption
           </Button>
