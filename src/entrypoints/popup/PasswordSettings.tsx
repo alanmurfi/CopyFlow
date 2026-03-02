@@ -246,7 +246,7 @@ export default function PasswordSettings({
   }
 
   return (
-    <Stack gap="md" p="md" style={{ height: '100%' }}>
+    <Stack gap="md" p="md" style={{ height: '100%', overflowY: 'auto' }}>
       <Group gap="xs">
         <Button
           variant="subtle"
