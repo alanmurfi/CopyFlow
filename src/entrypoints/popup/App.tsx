@@ -38,7 +38,6 @@ import {
 } from '@tabler/icons-react';
 import {
   getEntries,
-  addEntry,
   deleteEntry,
   updateEntry,
   clearAllEntries,
@@ -50,7 +49,6 @@ import {
   STORAGE_QUOTA_BYTES,
   STORAGE_QUOTA_WARN_THRESHOLD,
 } from '../../lib/storage';
-import { v4 as uuidv4 } from 'uuid';
 import { isUnlocked } from '../../lib/session';
 import { getFeatureFlags } from '../../lib/features';
 import type { ClipboardEntry, Folder, Settings, FeatureFlags } from '../../types';
@@ -143,6 +141,8 @@ export default function App() {
           if (!imageType) continue;
 
           const blob = await item.getType(imageType);
+          // Cap raw blob size before base64 conversion — background compresses to JPEG
+          if (blob.size > 30 * 1024 * 1024) continue;
           const dataUrl = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
@@ -156,14 +156,8 @@ export default function App() {
           if (key === lastKey) return;
           lastKey = key;
 
-          await addEntry({
-            id: uuidv4(),
-            content: key,
-            type: 'image',
-            imageDataUrl: dataUrl,
-            timestamp: Date.now(),
-            pinned: false,
-          });
+          // Route through background for compression and dedup (same path as content script)
+          chrome.runtime.sendMessage({ type: 'STORE_IMAGE_ENTRY', dedupKey: key, dataUrl });
           // addEntry writes to storage → chrome.storage.onChanged fires → loadEntries() updates UI
           return;
         }
@@ -201,18 +195,22 @@ export default function App() {
   async function loadStorageInfo() {
     const info = await getStorageUsage();
     setStorageInfo(info);
+    // Clear the sticky quotaExceeded flag when storage is back under threshold
+    if (info.bytesUsed / STORAGE_QUOTA_BYTES < 0.95) {
+      setQuotaExceeded(false);
+    }
   }
 
-  async function handleUnlock(password: string): Promise<boolean> {
+  async function handleUnlock(password: string): Promise<{ success: boolean; cooldownSeconds?: number }> {
     const response = await chrome.runtime.sendMessage({
       type: 'UNLOCK_EXTENSION',
       password,
     });
     if (response?.success) {
       setIsLocked(false);
-      return true;
+      return { success: true };
     }
-    return false;
+    return { success: false, cooldownSeconds: response?.cooldownSeconds };
   }
 
   async function handleLock() {

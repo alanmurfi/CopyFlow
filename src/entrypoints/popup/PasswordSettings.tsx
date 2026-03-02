@@ -20,6 +20,7 @@ import {
   removeEncryptionMeta,
   migrateToEncrypted,
   migrateToPlaintext,
+  reencryptEntries,
   exportData,
 } from '../../lib/storage';
 import {
@@ -32,7 +33,7 @@ import {
 } from '../../lib/crypto';
 import { storeSessionKey, clearSessionKey } from '../../lib/session';
 import { getEncryptionMeta } from '../../lib/storage';
-import { migrateSnippetsToEncrypted, migrateSnippetsToPlaintext } from '../../lib/snippets';
+import { migrateSnippetsToEncrypted, migrateSnippetsToPlaintext, reencryptSnippets } from '../../lib/snippets';
 import type { EncryptionMeta } from '../../types';
 
 interface PasswordSettingsProps {
@@ -206,18 +207,15 @@ export default function PasswordSettings({
       // Derive old key to decrypt
       const oldKey = await deriveCryptoKey(currentPassword, oldSalt);
 
-      // Decrypt everything (entries + snippets)
-      await migrateToPlaintext(oldKey);
-      await migrateSnippetsToPlaintext(oldKey);
-
       // Generate new salt and key
       const newSalt = generateSalt();
       const newHash = await hashPassword(newPassword, newSalt);
       const newKey = await deriveCryptoKey(newPassword, newSalt);
 
-      // Re-encrypt with new key
-      await migrateToEncrypted(newKey);
-      await migrateSnippetsToEncrypted(newKey);
+      // Atomic re-encryption: decrypt with old key and re-encrypt with new key
+      // in a single storage write — no plaintext-on-disk window.
+      await reencryptEntries(oldKey, newKey);
+      await reencryptSnippets(oldKey, newKey);
 
       // Update metadata
       const newMeta: EncryptionMeta = {

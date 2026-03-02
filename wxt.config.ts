@@ -11,6 +11,7 @@ export default defineConfig({
       'clipboardRead',
       'clipboardWrite',
       'storage',
+      'unlimitedStorage',
       'offscreen',
       'activeTab',
       'tabs',

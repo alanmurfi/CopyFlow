@@ -370,6 +370,8 @@ export default defineContentScript({
           if (!imageType) continue;
 
           const blob = await item.getType(imageType);
+          // Cap raw blob size before base64 conversion — background compresses to JPEG
+          if (blob.size > 30 * 1024 * 1024) continue;
           const dataUrl = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
@@ -609,6 +611,11 @@ export default defineContentScript({
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
+    // NOTE (M1): document.execCommand('insertText') is the correct approach for contentEditable.
+    // It fires the browser's native input event, which works with React, Vue, ProseMirror, etc.
+    // Some rich text editors (Slate, TipTap, Draft.js) may handle insertText inconsistently —
+    // this is a known limitation, not fixable without framework-specific integration that would
+    // break normal text fields. The fallback is acceptable.
     function expandInContentEditable(
       shortcut: string,
       text: string,

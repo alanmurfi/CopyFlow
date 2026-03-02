@@ -125,8 +125,8 @@ afterEach(() => {
 // ============================================
 
 describe('storage constants', () => {
-  it('STORAGE_QUOTA_BYTES is 5 MB', () => {
-    expect(STORAGE_QUOTA_BYTES).toBe(5_242_880);
+  it('STORAGE_QUOTA_BYTES is 50 MB', () => {
+    expect(STORAGE_QUOTA_BYTES).toBe(52_428_800);
   });
 
   it('STORAGE_QUOTA_WARN_THRESHOLD is 0.8', () => {

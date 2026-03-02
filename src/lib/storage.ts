@@ -19,9 +19,9 @@ const STORAGE_KEYS = {
 // --- Constants ---
 
 const MAX_TEXT_SIZE_BYTES = 500 * 1024;   // 500 KB per text entry
-const MAX_IMAGE_SIZE_BYTES = 3 * 1024 * 1024; // 3 MB per image entry
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB per image entry (unlimitedStorage)
 
-export const STORAGE_QUOTA_BYTES = 5_242_880; // 5 MB chrome.storage.local limit
+export const STORAGE_QUOTA_BYTES = 52_428_800; // 50 MB soft limit (unlimitedStorage removes Chrome's hard cap)
 export const STORAGE_QUOTA_WARN_THRESHOLD = 0.8; // Warn at 80% usage
 
 // Allowed MIME types for image data URIs (SVG excluded to prevent embedded script payloads)
@@ -309,6 +309,33 @@ export async function migrateToPlaintext(key: CryptoKey): Promise<void> {
   });
 }
 
+// --- Re-encryption (atomic password change) ---
+// Decrypt with old key and re-encrypt with new key in a single write.
+// Avoids the plaintext-on-disk window that would occur with migrateToPlaintext + migrateToEncrypted.
+
+export async function reencryptEntries(oldKey: CryptoKey, newKey: CryptoKey): Promise<void> {
+  return withEntryLock(async () => {
+    const raw = await getRawEntries();
+    if (raw.length === 0) return;
+
+    const decrypted: ClipboardEntry[] = [];
+    for (const entry of raw) {
+      if (isEncryptedEntry(entry)) {
+        try {
+          decrypted.push(await decryptEntry(entry, oldKey));
+        } catch (err) {
+          console.error('CopyFlow: Failed to decrypt entry during re-encryption', entry.id, err);
+        }
+      } else {
+        decrypted.push(entry as ClipboardEntry);
+      }
+    }
+
+    const reencrypted = await Promise.all(decrypted.map((e) => encryptEntry(e, newKey)));
+    await setRawEntries(reencrypted);
+  });
+}
+
 // --- Folders ---
 
 export async function getFolders(): Promise<Folder[]> {
@@ -441,6 +468,15 @@ export async function importData(json: string): Promise<{ entriesImported: numbe
 
   if (encEnabled && !key) {
     throw new Error('Extension is locked. Unlock before importing.');
+  }
+
+  // Strip folderId values that don't exist in the current folder list
+  const currentFolders = await getFolders();
+  const folderIds = new Set(currentFolders.map((f) => f.id));
+  for (const entry of validEntries) {
+    if (entry.folderId && !folderIds.has(entry.folderId)) {
+      entry.folderId = undefined;
+    }
   }
 
   // Merge within entry lock to prevent races with polling

@@ -12,8 +12,13 @@ import {
 } from '@mantine/core';
 import { IconLock, IconShieldLock } from '@tabler/icons-react';
 
+interface UnlockResult {
+  success: boolean;
+  cooldownSeconds?: number;
+}
+
 interface LockScreenProps {
-  onUnlock: (password: string) => Promise<boolean>;
+  onUnlock: (password: string) => Promise<UnlockResult>;
   isSetup: boolean; // true = first-time password setup, false = unlock existing
   onSetup?: (password: string) => Promise<boolean>;
 }
@@ -65,11 +70,14 @@ export default function LockScreen({ onUnlock, isSetup, onSetup }: LockScreenPro
     setLoading(true);
 
     try {
-      const success = await onUnlock(password);
-      if (!success) {
+      const result = await onUnlock(password);
+      if (!result.success) {
+        // Use server-side cooldown from background if provided, else fall back to local tracking
+        const serverCooldown = result.cooldownSeconds ?? 0;
         const newFails = failCount + 1;
         setFailCount(newFails);
-        const wait = getCooldownSeconds(newFails);
+        const localCooldown = getCooldownSeconds(newFails);
+        const wait = Math.max(serverCooldown, localCooldown);
         if (wait > 0) {
           setCooldown(wait);
           setError(`Wrong password. Try again in ${wait}s.`);

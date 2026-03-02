@@ -101,6 +101,11 @@ function handleReadClipboardFallback(sendResponse) {
 
 function handleWriteClipboard(text, sendResponse) {
   try {
+    // Cap text length to match MAX_TEXT_SIZE_BYTES (500 KB) in storage.ts
+    if (text.length > 512000) {
+      sendResponse({ success: false, error: 'Text too large for clipboard write' });
+      return;
+    }
     const textarea = document.getElementById('clipboard-area');
     textarea.value = text;
     textarea.select();

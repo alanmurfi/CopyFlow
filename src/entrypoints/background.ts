@@ -23,8 +23,13 @@ const IMG_QUALITY = 0.82;   // JPEG quality
 
 async function compressImageDataUrl(dataUrl: string): Promise<string> {
   try {
-    const res = await fetch(dataUrl);
-    const blob = await res.blob();
+    // Decode data URI to Blob without fetch() so connect-src 'none' CSP is respected
+    const [header, b64] = dataUrl.split(',', 2);
+    const mime = header.match(/:(.*?);/)?.[1] ?? 'image/png';
+    const raw = atob(b64);
+    const bytes0 = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes0[i] = raw.charCodeAt(i);
+    const blob = new Blob([bytes0], { type: mime });
     const bitmap = await createImageBitmap(blob);
 
     let { width, height } = bitmap;
@@ -50,7 +55,8 @@ async function compressImageDataUrl(dataUrl: string): Promise<string> {
       binary += String.fromCharCode(...(bytes.subarray(i, i + chunk) as unknown as number[]));
     }
     return `data:image/jpeg;base64,${btoa(binary)}`;
-  } catch {
+  } catch (err) {
+    console.error('CopyFlow: Image compression failed, using original:', err);
     return dataUrl; // compression failed — return original and let size check handle it
   }
 }
@@ -89,6 +95,12 @@ export default defineBackground(() => {
   let pollingTimer: ReturnType<typeof setInterval> | null = null;
   let offscreenReady = false;
   let autoLockTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // --- Unlock rate limiting (H3 fix) ---
+  // Enforced in the service worker so it cannot be bypassed via chrome.runtime.sendMessage.
+  // Resets on browser restart (service worker restart also clears the session key).
+  let unlockAttempts = 0;
+  let unlockCooldownUntil = 0;
 
   // Allow popup to access session storage for the encryption key
   chrome.storage.session.setAccessLevel({
@@ -490,7 +502,7 @@ export default defineBackground(() => {
           const url = tab?.url ?? '';
           const isWebUrl = (u: string) => u.startsWith('https://') || u.startsWith('http://');
 
-          // Compress before storing to stay under the 3 MB per-entry limit
+          // Compress before storing to reduce storage footprint
           const storedDataUrl = await compressImageDataUrl(message.dataUrl);
 
           const entry: ClipboardEntry = {
@@ -579,9 +591,54 @@ export default defineBackground(() => {
       return true;
     }
 
+    // Handle image storage from popup (same logic as content script handler)
+    if (message.type === 'STORE_IMAGE_ENTRY') {
+      (async () => {
+        try {
+          if (typeof message.dedupKey !== 'string' || typeof message.dataUrl !== 'string') {
+            sendResponse({ success: false });
+            return;
+          }
+
+          if (await isLastClipboard(message.dedupKey)) {
+            sendResponse({ success: true });
+            return;
+          }
+          await setLastClipboard(message.dedupKey);
+
+          const storedDataUrl = await compressImageDataUrl(message.dataUrl);
+
+          const entry: ClipboardEntry = {
+            id: uuidv4(),
+            content: message.dedupKey,
+            type: 'image',
+            imageDataUrl: storedDataUrl,
+            timestamp: Date.now(),
+            pinned: false,
+          };
+
+          await addEntry(entry);
+          resetAutoLockTimer();
+          sendResponse({ success: true });
+        } catch (err) {
+          console.debug('CopyFlow: STORE_IMAGE_ENTRY (popup) error:', err);
+          sendResponse({ success: false });
+        }
+      })();
+      return true;
+    }
+
     if (message.type === 'UNLOCK_EXTENSION') {
       (async () => {
         try {
+          // Rate limiting: check cooldown before attempting verification
+          const now = Date.now();
+          if (now < unlockCooldownUntil) {
+            const remaining = Math.ceil((unlockCooldownUntil - now) / 1000);
+            sendResponse({ success: false, error: 'Too many attempts', cooldownSeconds: remaining });
+            return;
+          }
+
           const meta = await getEncryptionMeta();
           if (!meta) {
             sendResponse({ success: false, error: 'No encryption configured' });
@@ -591,9 +648,19 @@ export default defineBackground(() => {
           const salt = saltFromBase64(meta.salt);
           const valid = await verifyPassword(message.password, salt, meta.passwordHash);
           if (!valid) {
-            sendResponse({ success: false, error: 'Wrong password' });
+            unlockAttempts++;
+            let cooldownSeconds = 0;
+            if (unlockAttempts >= 3) {
+              cooldownSeconds = Math.min(2 ** (unlockAttempts - 3), 60);
+              unlockCooldownUntil = Date.now() + cooldownSeconds * 1000;
+            }
+            sendResponse({ success: false, error: 'Wrong password', cooldownSeconds });
             return;
           }
+
+          // Success — reset rate limiter
+          unlockAttempts = 0;
+          unlockCooldownUntil = 0;
 
           // Derive encryption key and store in session
           const key = await deriveCryptoKey(message.password, salt);

@@ -382,12 +382,12 @@ Background has **two** `onMessage` listeners with distinct routing:
 
 ### Storage Limits
 - **Per-entry max (text)**: 500 KB (enforced at addEntry)
-- **Per-entry max (image)**: 3 MB (enforced at addEntry)
+- **Per-entry max (image)**: 10 MB (enforced at addEntry)
 - **Image compression**: Resized to max 1400px, JPEG at 82% quality (background.ts)
-- **chrome.storage.local quota**: ~5 MB total
-- **Quota warning**: Badge + UI warning at 80% usage, skip writes at 95%
+- **chrome.storage.local quota**: Unlimited (`unlimitedStorage` permission), 50 MB soft limit enforced in code
+- **Quota warning**: Badge + UI warning at 80% of soft limit, skip writes at 95%
 - **Encryption overhead**: ~33% size increase (base64 encoding)
-- **Estimated capacity**: ~3000-5000 text entries, fewer with images
+- **Estimated capacity**: ~30,000+ text entries, thousands with images
 
 ### Bottlenecks
 1. **PBKDF2 derivation**: ~200ms on average hardware (intentional - security vs UX trade-off)

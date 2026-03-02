@@ -210,6 +210,31 @@ export async function migrateSnippetsToPlaintext(key: CryptoKey): Promise<void> 
   });
 }
 
+// --- Re-encryption (atomic password change) ---
+
+export async function reencryptSnippets(oldKey: CryptoKey, newKey: CryptoKey): Promise<void> {
+  return withSnippetLock(async () => {
+    const raw = await getRawSnippets();
+    if (raw.length === 0) return;
+
+    const decrypted: Snippet[] = [];
+    for (const entry of raw) {
+      if (isEncryptedSnippet(entry)) {
+        try {
+          decrypted.push(await decryptSnippet(entry, oldKey));
+        } catch (err) {
+          console.error('CopyFlow: Failed to decrypt snippet during re-encryption', entry.id, err);
+        }
+      } else {
+        decrypted.push(entry as Snippet);
+      }
+    }
+
+    const reencrypted = await Promise.all(decrypted.map((s) => encryptSnippet(s, newKey)));
+    await setRawSnippets(reencrypted);
+  });
+}
+
 // --- Shortcut validation ---
 
 export function isValidShortcut(shortcut: string): { valid: boolean; error?: string } {
