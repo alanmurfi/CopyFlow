@@ -5,18 +5,81 @@
 // Manages context menus, auto-cleanup, and encryption lock state.
 
 import { v4 as uuidv4 } from 'uuid';
-import { addEntry, getEntries, setLastClipboard, isLastClipboard, getSettings, deleteEntries, getEncryptionMeta, isEncryptionEnabled } from '../lib/storage';
+import { addEntry, getEntries, setLastClipboard, isLastClipboard, getSettings, deleteEntries, getEncryptionMeta, isEncryptionEnabled, STORAGE_QUOTA_BYTES, STORAGE_QUOTA_WARN_THRESHOLD } from '../lib/storage';
 import { deriveCryptoKey, verifyPassword, saltFromBase64 } from '../lib/crypto';
 import { storeSessionKey, clearSessionKey, isUnlocked } from '../lib/session';
 import { getSnippetShortcuts, getSnippets, resolveTemplate } from '../lib/snippets';
 import { isFeatureEnabled } from '../lib/features';
 import type { ClipboardEntry } from '../types';
 
+// ==========================================
+// Image compression (OffscreenCanvas — available in MV3 service workers)
+// ==========================================
+// Resizes images larger than MAX_DIM and re-encodes as JPEG to keep storage
+// under the 3 MB per-entry limit.  Falls back to the original if anything fails.
+
+const IMG_MAX_DIM = 1400;   // px — max width or height after resize
+const IMG_QUALITY = 0.82;   // JPEG quality
+
+async function compressImageDataUrl(dataUrl: string): Promise<string> {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const bitmap = await createImageBitmap(blob);
+
+    let { width, height } = bitmap;
+    if (width > IMG_MAX_DIM || height > IMG_MAX_DIM) {
+      const scale = IMG_MAX_DIM / Math.max(width, height);
+      width  = Math.round(width  * scale);
+      height = Math.round(height * scale);
+    }
+
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { bitmap.close(); return dataUrl; }
+
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+
+    const compressed = await canvas.convertToBlob({ type: 'image/jpeg', quality: IMG_QUALITY });
+    const buffer = await compressed.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunk = 8192;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...(bytes.subarray(i, i + chunk) as unknown as number[]));
+    }
+    return `data:image/jpeg;base64,${btoa(binary)}`;
+  } catch {
+    return dataUrl; // compression failed — return original and let size check handle it
+  }
+}
+
 // Strip control characters and Unicode BiDi overrides that could cause UI spoofing
 function sanitizeMenuLabel(text: string): string {
   return text
     .replace(/[\x00-\x1f\u202a-\u202e\u2066-\u2069\u200e\u200f]/g, '')
     .replace(/\n/g, ' ');
+}
+
+// Update extension badge to warn when storage is nearly full
+async function updateQuotaBadge(): Promise<void> {
+  try {
+    const bytesUsed = await chrome.storage.local.getBytesInUse();
+    const ratio = bytesUsed / STORAGE_QUOTA_BYTES;
+
+    if (ratio >= 0.95) {
+      chrome.action.setBadgeText({ text: '!' });
+      chrome.action.setBadgeBackgroundColor({ color: '#e03131' }); // red
+    } else if (ratio >= STORAGE_QUOTA_WARN_THRESHOLD) {
+      chrome.action.setBadgeText({ text: '!' });
+      chrome.action.setBadgeBackgroundColor({ color: '#fd7e14' }); // orange
+    } else {
+      chrome.action.setBadgeText({ text: '' });
+    }
+  } catch {
+    // getBytesInUse failed — skip badge update
+  }
 }
 
 export default defineBackground(() => {
@@ -126,6 +189,9 @@ export default defineBackground(() => {
 
       await addEntry(entry);
       console.log('CopyFlow: Saved new clip:', response.content.substring(0, 50));
+
+      // Update storage badge after adding entry
+      updateQuotaBadge();
 
       // Reset auto-lock timer on activity
       resetAutoLockTimer();
@@ -258,6 +324,18 @@ export default defineBackground(() => {
 
       // Image entries can't be pasted as text
       if (entry.type === 'image') return;
+
+      // Warn when pasting to non-secure (HTTP) pages — exclude localhost for dev
+      const isInsecure = url.startsWith('http://') && !url.startsWith('http://localhost') && !url.startsWith('http://127.0.0.1');
+      if (isInsecure) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'COPYFLOW_INSECURE_PASTE_WARNING',
+          entryContent: entry.content,
+        }).catch(() => {
+          console.debug('CopyFlow: Content script not available on this tab');
+        });
+        return;
+      }
 
       // Write text to clipboard first, then trigger native paste in the page.
       // This works with all element types (input, textarea, contentEditable)
@@ -412,11 +490,14 @@ export default defineBackground(() => {
           const url = tab?.url ?? '';
           const isWebUrl = (u: string) => u.startsWith('https://') || u.startsWith('http://');
 
+          // Compress before storing to stay under the 3 MB per-entry limit
+          const storedDataUrl = await compressImageDataUrl(message.dataUrl);
+
           const entry: ClipboardEntry = {
             id: uuidv4(),
             content: message.dedupKey,
             type: 'image',
-            imageDataUrl: message.dataUrl,
+            imageDataUrl: storedDataUrl,
             timestamp: Date.now(),
             sourceUrl: isWebUrl(url) ? url : undefined,
             sourceTitle: isWebUrl(url) ? tab?.title : undefined,
@@ -428,6 +509,28 @@ export default defineBackground(() => {
           sendResponse({ success: true });
         } catch (err) {
           console.debug('CopyFlow: STORE_IMAGE_ENTRY error:', err);
+          sendResponse({ success: false });
+        }
+      })();
+      return true;
+    }
+
+    if (message.type === 'COPYFLOW_CONFIRM_INSECURE_PASTE') {
+      // User confirmed paste on insecure (HTTP) page
+      (async () => {
+        try {
+          if (typeof message.content !== 'string') {
+            sendResponse({ success: false });
+            return;
+          }
+          await ensureOffscreen();
+          await sendToOffscreen({ type: 'WRITE_CLIPBOARD', text: message.content });
+          const tabId = sender.tab?.id;
+          if (tabId) {
+            chrome.tabs.sendMessage(tabId, { type: 'COPYFLOW_TRIGGER_PASTE' }).catch(() => {});
+          }
+          sendResponse({ success: true });
+        } catch {
           sendResponse({ success: false });
         }
       })();
@@ -519,6 +622,7 @@ export default defineBackground(() => {
   // Start on install/startup
   startPolling();
   rebuildContextMenus();
+  updateQuotaBadge();
 
   // Run cleanup on startup and every hour
   cleanupOldEntries();
@@ -528,6 +632,7 @@ export default defineBackground(() => {
   chrome.storage.onChanged.addListener((changes) => {
     if (changes['copyflow_entries']) {
       rebuildContextMenus();
+      updateQuotaBadge();
     }
     if (changes['copyflow_settings']) {
       // Re-arm the auto-lock timer so the new autoLockMinutes value takes effect immediately

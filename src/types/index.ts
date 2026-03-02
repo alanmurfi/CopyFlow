@@ -104,7 +104,9 @@ export type MessageType =
   | { type: 'GET_SNIPPETS' }
   | { type: 'EXPAND_SNIPPET'; shortcut: string }
   | { type: 'COPYFLOW_SNIPPETS_UPDATED' }
-  | { type: 'SNIPPETS_CHANGED' };
+  | { type: 'SNIPPETS_CHANGED' }
+  | { type: 'COPYFLOW_INSECURE_PASTE_WARNING'; entryContent: string }
+  | { type: 'COPYFLOW_CONFIRM_INSECURE_PASTE'; content: string };
 
 export interface StorageData {
   entries: ClipboardEntry[];

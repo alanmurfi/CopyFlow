@@ -150,12 +150,206 @@ export default defineContentScript({
       return clean.slice(0, max) + '\u2026';
     }
 
-    // Listen for native copy events (text)
+    // ==========================================
+    // Insecure Paste Warning
+    // ==========================================
+    // Shows a warning banner when pasting via context menu on HTTP pages.
+
+    let insecureWarning: HTMLDivElement | null = null;
+
+    function showInsecurePasteWarning(content: string) {
+      // Remove existing warning if any
+      if (insecureWarning) {
+        insecureWarning.remove();
+        insecureWarning = null;
+      }
+
+      insecureWarning = document.createElement('div');
+      insecureWarning.id = 'copyflow-insecure-warning';
+
+      const shadow = insecureWarning.attachShadow({ mode: 'closed' });
+
+      const style = document.createElement('style');
+      style.textContent = `
+        :host {
+          all: initial;
+        }
+        .cf-warn {
+          position: fixed;
+          bottom: 24px;
+          right: 24px;
+          z-index: 2147483647;
+          padding: 14px 18px;
+          background: #1a1b1e;
+          color: #fff;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 13px;
+          line-height: 1.5;
+          border-radius: 12px;
+          border: 1px solid #fd7e14;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.35);
+          max-width: 340px;
+          opacity: 0;
+          transform: translateY(8px);
+          animation: cf-slide-in 0.2s ease forwards;
+        }
+        .cf-warn.cf-hide {
+          animation: cf-slide-out 0.2s ease forwards;
+        }
+        .cf-warn-title {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          color: #fd7e14;
+          font-weight: 600;
+          font-size: 13px;
+          margin-bottom: 6px;
+        }
+        .cf-warn-preview {
+          color: #8b8d91;
+          font-size: 12px;
+          margin-bottom: 10px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .cf-warn-buttons {
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+        }
+        .cf-btn {
+          border: none;
+          border-radius: 6px;
+          padding: 6px 14px;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          font-family: inherit;
+        }
+        .cf-btn-cancel {
+          background: #373a40;
+          color: #c1c2c5;
+        }
+        .cf-btn-cancel:hover {
+          background: #495057;
+        }
+        .cf-btn-paste {
+          background: #fd7e14;
+          color: #fff;
+        }
+        .cf-btn-paste:hover {
+          background: #e8590c;
+        }
+        @keyframes cf-slide-in {
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        @keyframes cf-slide-out {
+          from {
+            opacity: 1;
+            transform: translateY(0);
+          }
+          to {
+            opacity: 0;
+            transform: translateY(8px);
+          }
+        }
+      `;
+
+      const container = document.createElement('div');
+      container.className = 'cf-warn';
+
+      // Title row with shield icon
+      const titleRow = document.createElement('div');
+      titleRow.className = 'cf-warn-title';
+
+      const shield = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      shield.setAttribute('width', '16');
+      shield.setAttribute('height', '16');
+      shield.setAttribute('viewBox', '0 0 24 24');
+      shield.setAttribute('fill', 'none');
+      shield.setAttribute('stroke', '#fd7e14');
+      shield.setAttribute('stroke-width', '2');
+      shield.setAttribute('stroke-linecap', 'round');
+      shield.setAttribute('stroke-linejoin', 'round');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z');
+      shield.appendChild(path);
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', '12'); line.setAttribute('y1', '8');
+      line.setAttribute('x2', '12'); line.setAttribute('y2', '12');
+      shield.appendChild(line);
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      dot.setAttribute('x1', '12'); dot.setAttribute('y1', '16');
+      dot.setAttribute('x2', '12.01'); dot.setAttribute('y2', '16');
+      shield.appendChild(dot);
+
+      titleRow.appendChild(shield);
+      titleRow.appendChild(document.createTextNode('Non-secure page (HTTP)'));
+
+      // Preview
+      const preview = document.createElement('div');
+      preview.className = 'cf-warn-preview';
+      preview.textContent = truncate(content, 50);
+
+      // Buttons
+      const buttons = document.createElement('div');
+      buttons.className = 'cf-warn-buttons';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'cf-btn cf-btn-cancel';
+      cancelBtn.textContent = 'Cancel';
+
+      const pasteBtn = document.createElement('button');
+      pasteBtn.className = 'cf-btn cf-btn-paste';
+      pasteBtn.textContent = 'Paste anyway';
+
+      buttons.appendChild(cancelBtn);
+      buttons.appendChild(pasteBtn);
+
+      container.appendChild(titleRow);
+      container.appendChild(preview);
+      container.appendChild(buttons);
+
+      shadow.appendChild(style);
+      shadow.appendChild(container);
+      document.documentElement.appendChild(insecureWarning);
+
+      function dismiss() {
+        container.classList.add('cf-hide');
+        setTimeout(() => {
+          insecureWarning?.remove();
+          insecureWarning = null;
+        }, 200);
+      }
+
+      cancelBtn.addEventListener('click', dismiss);
+
+      pasteBtn.addEventListener('click', () => {
+        dismiss();
+        chrome.runtime.sendMessage({
+          type: 'COPYFLOW_CONFIRM_INSECURE_PASTE',
+          content,
+        });
+      });
+
+      // Auto-dismiss after 10 seconds (default: don't paste)
+      setTimeout(() => {
+        if (insecureWarning) dismiss();
+      }, 10_000);
+    }
+
+    // Listen for native copy events (text + immediate image check)
     document.addEventListener('copy', () => {
       const selection = window.getSelection()?.toString();
       if (selection && selection.trim().length > 0) {
         showToast(selection.trim());
       }
+      // Also check for image content immediately (handles Ctrl+C on image elements)
+      setTimeout(pollImageClipboard, 50);
     });
 
     // ==========================================
@@ -168,7 +362,6 @@ export default defineContentScript({
     let lastImageDedupKey = '';
 
     async function pollImageClipboard(): Promise<void> {
-      if (!document.hasFocus()) return;
       try {
         const items = await navigator.clipboard.read();
         for (const item of items) {
@@ -200,6 +393,15 @@ export default defineContentScript({
 
     setInterval(pollImageClipboard, 2000);
 
+    // Poll multiple times after regaining focus to catch right-click → Copy Image.
+    // Right-click opens an OS-level context menu, causing brief focus loss.
+    // We try at 50ms, 300ms, and 800ms to handle varying browser/OS timing.
+    window.addEventListener('focus', () => {
+      setTimeout(pollImageClipboard, 50);
+      setTimeout(pollImageClipboard, 300);
+      setTimeout(pollImageClipboard, 800);
+    });
+
     // ==========================================
     // 2. Message handler (paste + snippet updates)
     // ==========================================
@@ -224,6 +426,13 @@ export default defineContentScript({
         // types and frameworks (React, Vue, contentEditable, etc.) without needing
         // a user gesture when the extension has clipboardRead permission.
         document.execCommand('paste');
+        sendResponse({ success: true });
+      }
+
+      if (message.type === 'COPYFLOW_INSECURE_PASTE_WARNING') {
+        if (typeof message.entryContent === 'string') {
+          showInsecurePasteWarning(message.entryContent);
+        }
         sendResponse({ success: true });
       }
 

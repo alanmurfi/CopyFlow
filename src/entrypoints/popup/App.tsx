@@ -497,9 +497,10 @@ function MainContent({
     await loadEntries();
   }, []);
 
-  // Clear all
+  // Clear all — confirm dialog
   async function handleClearAll() {
     if (entries.length === 0) return;
+    if (!window.confirm('Delete all clips? This cannot be undone.')) return;
     await clearAllEntries();
     await loadEntries();
   }

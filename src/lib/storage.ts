@@ -202,6 +202,18 @@ export function addEntry(entry: ClipboardEntry): Promise<void> {
       }
     }
 
+    // Pre-check: skip write if storage is nearly full (>95% capacity)
+    try {
+      const bytesUsed = await chrome.storage.local.getBytesInUse();
+      if (bytesUsed > STORAGE_QUOTA_BYTES * 0.95) {
+        console.debug('CopyFlow: Storage near capacity, skipping new entry');
+        await chrome.storage.local.set({ [STORAGE_KEYS.quotaExceeded]: true }).catch(() => {});
+        return;
+      }
+    } catch {
+      // getBytesInUse unavailable — proceed with write and let the catch below handle it
+    }
+
     try {
       if (encEnabled && key) {
         const encrypted = await Promise.all(entries.map((e) => encryptEntry(e, key)));
@@ -209,6 +221,8 @@ export function addEntry(entry: ClipboardEntry): Promise<void> {
       } else {
         await setRawEntries(entries);
       }
+      // Clear quota exceeded flag on successful write
+      await chrome.storage.local.set({ [STORAGE_KEYS.quotaExceeded]: false }).catch(() => {});
     } catch (err) {
       console.error('CopyFlow: Storage write failed (quota?):', err);
       // Signal quota exceeded so the UI can warn the user
