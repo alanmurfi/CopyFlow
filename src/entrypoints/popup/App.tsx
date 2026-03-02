@@ -1012,9 +1012,27 @@ function ClipItem({
             {formatTime(entry.timestamp)}
           </Text>
           {entry.sourceTitle && (
-            <Text size="xs" c="dimmed" lineClamp={1} maw={120}>
-              · {entry.sourceTitle}
-            </Text>
+            entry.sourceUrl ? (
+              <Text
+                component="a"
+                href={entry.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                size="xs"
+                c="dimmed"
+                lineClamp={1}
+                maw={120}
+                style={{ textDecoration: 'none', cursor: 'pointer' }}
+                onMouseOver={(e: React.MouseEvent<HTMLAnchorElement>) => { e.currentTarget.style.textDecoration = 'underline'; }}
+                onMouseOut={(e: React.MouseEvent<HTMLAnchorElement>) => { e.currentTarget.style.textDecoration = 'none'; }}
+              >
+                · {entry.sourceTitle}
+              </Text>
+            ) : (
+              <Text size="xs" c="dimmed" lineClamp={1} maw={120}>
+                · {entry.sourceTitle}
+              </Text>
+            )
           )}
           {activeFolder && (
             <Badge
