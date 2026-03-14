@@ -89,6 +89,10 @@ async function updateQuotaBadge(): Promise<void> {
 }
 
 export default defineBackground(() => {
+  // Restrict session storage to trusted contexts only (background + popup).
+  // Content scripts must never access the encryption key.
+  chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+
   const POLL_INTERVAL = 1500; // ms
   const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
   const MAX_CONTEXT_MENU_ITEMS = 10;
@@ -117,14 +121,14 @@ export default defineBackground(() => {
       });
 
       if (contexts.length === 0) {
-        console.log('CopyFlow: Creating offscreen document...');
+        console.debug('CopyFlow: Creating offscreen document...');
         await chrome.offscreen.createDocument({
           url: 'offscreen.html',
           reasons: ['CLIPBOARD' as any],
           justification: 'Monitor clipboard for history',
         });
         await new Promise((r) => setTimeout(r, 200));
-        console.log('CopyFlow: Offscreen document created');
+        console.debug('CopyFlow: Offscreen document created');
       }
 
       offscreenReady = true;
@@ -200,7 +204,7 @@ export default defineBackground(() => {
       };
 
       await addEntry(entry);
-      console.log('CopyFlow: Saved new clip:', response.content.substring(0, 50));
+      console.debug('CopyFlow: Saved new clip');
 
       // Update storage badge after adding entry
       updateQuotaBadge();
@@ -226,7 +230,7 @@ export default defineBackground(() => {
         autoLockTimer = setTimeout(async () => {
           await clearSessionKey();
           await rebuildContextMenus();
-          console.log('CopyFlow: Auto-locked after inactivity');
+          console.debug('CopyFlow: Auto-locked after inactivity');
         }, settings.autoLockMinutes * 60 * 1000);
       }
     } catch {
@@ -384,7 +388,7 @@ export default defineBackground(() => {
       if (toDelete.length > 0) {
         // Batch delete in a single atomic operation (uses mutex internally)
         await deleteEntries(toDelete.map((e) => e.id));
-        console.log(`CopyFlow: Auto-deleted ${toDelete.length} old clips`);
+        console.debug(`CopyFlow: Auto-deleted ${toDelete.length} old clips`);
         await rebuildContextMenus();
       }
     } catch (err) {
@@ -707,5 +711,5 @@ export default defineBackground(() => {
     }
   });
 
-  console.log('CopyFlow: Background service worker started');
+  console.debug('CopyFlow: Background service worker started');
 });

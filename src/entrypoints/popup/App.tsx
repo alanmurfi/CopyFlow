@@ -531,7 +531,7 @@ function MainContent({
         const text = await file.text();
         const result = await importData(text);
         await loadEntries();
-        console.log(`CopyFlow: Imported ${result.entriesImported} new clips`);
+        console.debug(`CopyFlow: Imported ${result.entriesImported} new clips`);
       } catch (err) {
         console.error('Import failed:', err);
       }
@@ -796,7 +796,7 @@ function MainContent({
             {storageInfo.totalEntries} clips · {formatBytes(storageInfo.bytesUsed)} used
           </Text>
           <Text size="xs" c="dimmed">
-            CopyFlow v0.2.0
+            CopyFlow v0.2.1
           </Text>
         </Group>
         {quotaExceeded && (
