@@ -1,8 +1,33 @@
 # CLAUDE.md — CopyFlow Project Context
 
-**Last Updated:** 2026-03-02
-**Version:** 0.2.0
-**Status:** Active development — encryption, snippets, folders, image support shipped
+**Last Updated:** 2026-03-14
+**Version:** 0.2.1
+**Status:** Launch-ready — encryption, snippets, folders, image support, security hardening complete
+
+---
+
+## Critical Rules
+
+- NEVER bypass the storage mutex — all entry read-modify-write operations go through `withEntryLock()`
+- NEVER read raw `chrome.storage.local` for UI data — always use `getEntries()` (handles decryption)
+- NEVER import password settings from backups — `passwordEnabled` and `autoLockMinutes` excluded for security
+- NEVER use `console.log` in production — use `console.debug` only
+- NEVER send data to external servers — all storage is local-only
+- ALL storage operations must handle both encrypted and plaintext entry types
+- ALL message handlers must validate `sender.id` and `sender.tab` for privilege separation
+- ALL user input from imports must go through `isValidEntry()` validation
+- SVG data URIs blocked, BiDi characters stripped, content script messages never privileged
+
+---
+
+## Success Metrics
+
+- **Build:** `npx tsc --noEmit` passes with zero errors
+- **Tests:** all unit tests passing (`pnpm test`), both encryption ON and OFF
+- **Security:** no XSS vectors, no privilege escalation paths, constant-time password comparison
+- **Performance:** PBKDF2 derivation ~200ms, AES-GCM <1ms/entry, storage I/O <50ms for 500 entries
+- **Capacity:** ~30,000+ text entries without quota issues
+- **Coverage:** new `src/lib/` modules include unit tests in same commit
 
 ---
 
@@ -108,6 +133,7 @@ Prevents offline password cracking if one key is compromised.
 - **IV**: 12-byte random nonce per entry (cryptographically secure)
 - **Salt**: 16-byte random per-password
 - **Session Storage**: CryptoKey stored as JWK in `chrome.storage.session` (survives service worker restarts, cleared on browser close)
+- **Session Access Level**: Explicitly set to `TRUSTED_CONTEXTS` — content scripts cannot access the encryption key
 
 ### Attack Surface Mitigation
 1. **XSS Prevention**:
@@ -456,7 +482,13 @@ Background has **two** `onMessage` listeners with distinct routing:
 - Unit tests started (crypto, storage, session, features, snippets)
 - Feature flags system
 
-### Remaining v0.2.0 Work
+### v0.2.1 (2026-03-14) — Security Hardening
+- Replaced all `console.log` with `console.debug` (no clipboard content in logs)
+- Explicit `setAccessLevel('TRUSTED_CONTEXTS')` for session storage
+- Fixed version string consistency across UI and manifest
+- 122 unit tests passing across 5 test suites
+
+### Remaining Work
 - Expand test coverage (UI tests, integration tests)
 - Domain paste warnings on HTTPS (currently HTTP-only)
 

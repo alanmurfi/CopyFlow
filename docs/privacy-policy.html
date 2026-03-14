@@ -32,7 +32,7 @@
 </head>
 <body>
   <h1>CopyFlow Privacy Policy</h1>
-  <p class="updated">Last updated: March 2, 2026</p>
+  <p class="updated">Last updated: March 14, 2026</p>
 
   <div class="highlight">
     <strong>The short version:</strong> CopyFlow stores your clipboard history locally on your device. We do not collect, transmit, or sell any of your data. We have no servers. We have no analytics. We don't even have accounts.
@@ -46,13 +46,14 @@
     <li>The title and URL of the page you copied from (for your reference only)</li>
     <li>Whether you pinned or edited the clip</li>
     <li>Folder assignment (if you organize clips into folders)</li>
+    <li>Text snippets you create (shortcut triggers and template content)</li>
   </ul>
   <p>All of this data is stored locally in your browser using Chrome's built-in storage API (<code>chrome.storage.local</code>). It never leaves your device.</p>
 
   <h2>Optional encryption</h2>
   <p>CopyFlow includes an optional password-based encryption feature. When enabled:</p>
   <ul>
-    <li>All clipboard entries are encrypted on your device using AES-256-GCM before being saved to storage.</li>
+    <li>All clipboard entries and text snippets are encrypted on your device using AES-256-GCM before being saved to storage.</li>
     <li>The encryption key is derived from your password using PBKDF2-SHA256 (600,000 iterations). Your password is never stored.</li>
     <li>The derived key is kept in <code>chrome.storage.session</code> while the browser is open, and cleared automatically when the browser closes.</li>
     <li>Without your password, the encrypted data cannot be read — not even by CopyFlow developers (we have no servers or access to your device).</li>

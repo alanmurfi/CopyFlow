@@ -12,13 +12,13 @@ import {
 import {
   IconClipboard,
   IconCircleCheck,
-  IconSearch,
-  IconPin,
   IconKeyboard,
   IconShieldLock,
   IconFileExport,
   IconDeviceFloppy,
   IconLock,
+  IconTextCaption,
+  IconFolder,
 } from '@tabler/icons-react';
 
 export default function Welcome() {
@@ -91,6 +91,16 @@ export default function Welcome() {
               icon={<IconFileExport size={18} />}
               title="Export & Import"
               description="Your data is portable — back up or restore anytime."
+            />
+            <FeatureCard
+              icon={<IconTextCaption size={18} />}
+              title="Text Snippets"
+              description="Type a shortcut like /addr and it expands to full text."
+            />
+            <FeatureCard
+              icon={<IconFolder size={18} />}
+              title="Folders"
+              description="Organize clips into color-coded folders."
             />
             <FeatureCard
               icon={<IconDeviceFloppy size={18} />}

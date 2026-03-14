@@ -1,8 +1,8 @@
 # Product Requirements Document — CopyFlow
 
 **Document Version:** 1.2
-**Last Updated:** 2026-03-02
-**Product Version:** v0.2.0 (current)
+**Last Updated:** 2026-03-14
+**Product Version:** v0.2.1 (current)
 **Owner:** Solo Developer
 **Status:** Active Development
 
@@ -179,7 +179,7 @@
 | CSP headers | P1 | ✅ Shipped | 2026-03 | Content Security Policy in manifest |
 | Insecure paste warnings | P2 | ✅ Shipped | 2026-03 | Warn + confirm on paste to HTTP pages |
 | Feature flags | P2 | ✅ Shipped | 2026-03 | Toggle features (snippets) |
-| Unit tests | P0 | 🚧 In Progress | 2026-03 | Crypto, storage, session, features, snippets |
+| Unit tests | P0 | ✅ Shipped | 2026-03 | 122 tests across crypto, storage, session, features, snippets |
 
 ### v0.3.0 Features (Planned)
 
@@ -430,13 +430,13 @@
 - ✅ v0.1.0 shipped (2026-01-15)
 - ✅ Security hardening (2026-03-01)
 - ✅ v0.2.0 feature-complete (encryption, snippets, folders, images, onboarding)
-- 🚧 Finishing unit tests
-- Target: v0.2.0 public launch by 2026-03-15
+- ✅ v0.2.1 security hardening (console.debug, session access level, 122 tests)
+- Target: v0.2.1 public launch 2026-03-15
 
 ### Q2 2026
-- v0.2.0 public launch
+- v0.2.1 public launch
 - Marketing push (Hacker News, ProductHunt)
-- Community feedback → v0.2.1 bugfixes
+- Community feedback → v0.2.2 bugfixes
 - v0.3.0 planning (smart detection, encrypted sync)
 
 ### Q3 2026

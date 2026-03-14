@@ -62,7 +62,7 @@ pnpm build
 # Run unit tests
 pnpm test
 
-# Production zip is at .output/copyflow-0.2.0-chrome.zip
+# Production zip is at .output/copyflow-0.2.1-chrome.zip
 ```
 
 ## Project Structure

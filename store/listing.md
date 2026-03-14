@@ -61,3 +61,27 @@ English
 
 ## Tags/Keywords
 clipboard, clipboard history, clipboard manager, copy paste, clipboard tool, productivity, encryption, snippets, text expander
+
+---
+
+## Changelog (for store release notes)
+
+### v0.2.1 — Security hardening & bug fixes
+- Replaced all console.log with console.debug (no clipboard content in logs)
+- Explicit session storage access level restriction (TRUSTED_CONTEXTS only)
+- Fixed password settings layout (scrollable, cleaner disable flow)
+- Improved image clipboard capture reliability
+- Source titles are now clickable links to the original page
+- Updated privacy policy
+- 122 unit tests passing across 5 test suites
+
+### v0.2.0 — Encryption, snippets, folders & images
+- Password-based encryption (AES-256-GCM) with auto-lock
+- Text snippets with template variables ({{clipboard}}, {{date}}, {{cursor}})
+- Folder organization with color-coded labels
+- Image clipboard capture with JPEG compression
+- Insecure paste warning on HTTP pages
+- Storage quota monitoring
+- Onboarding welcome page
+- Keyboard shortcuts (j/k, /, p, d, e)
+- CSP headers in manifest
