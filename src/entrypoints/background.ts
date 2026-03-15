@@ -355,26 +355,27 @@ export default defineBackground(() => {
         return;
       }
 
-      // HTTPS domain check: warn on unfamiliar domains or sensitive content
+      // HTTPS sensitive content check: warn when pasting API keys, tokens, etc.
+      // Only block for sensitive content — regular pastes on HTTPS go through directly.
       if (url.startsWith('https://')) {
         try {
-          const hostname = new URL(url).hostname;
-          const trusted = await isDomainTrusted(hostname);
           const sensitiveCheck = isSensitiveContent(entry.content);
 
-          // Always warn if content is sensitive (even on trusted domains)
-          // Warn on untrusted domains even for non-sensitive content
-          if (sensitiveCheck.sensitive || !trusted) {
-            chrome.tabs.sendMessage(tab.id, {
-              type: 'COPYFLOW_DOMAIN_PASTE_WARNING',
-              entryContent: entry.content,
-              domain: hostname,
-              isSensitive: sensitiveCheck.sensitive,
-              reason: sensitiveCheck.reason,
-            }).catch(() => {
-              console.debug('CopyFlow: Content script not available on this tab');
-            });
-            return;
+          if (sensitiveCheck.sensitive) {
+            const hostname = new URL(url).hostname;
+            const trusted = await isDomainTrusted(hostname);
+            if (!trusted) {
+              chrome.tabs.sendMessage(tab.id, {
+                type: 'COPYFLOW_DOMAIN_PASTE_WARNING',
+                entryContent: entry.content,
+                domain: hostname,
+                isSensitive: true,
+                reason: sensitiveCheck.reason,
+              }).catch(() => {
+                console.debug('CopyFlow: Content script not available on this tab');
+              });
+              return;
+            }
           }
         } catch {
           // URL parsing failed — proceed with paste
