@@ -284,6 +284,7 @@ export default function App() {
       colorScheme={colorScheme}
       toggleColorScheme={toggleColorScheme}
       passwordEnabled={settings.passwordEnabled}
+      syncEnabled={settings.syncEnabled}
       snippetsEnabled={featureFlags.snippetsEnabled}
       tab={tab}
       onTabChange={setTab}
@@ -313,6 +314,7 @@ interface MainContentProps {
   colorScheme: string;
   toggleColorScheme: () => void;
   passwordEnabled: boolean;
+  syncEnabled: boolean;
   snippetsEnabled: boolean;
   tab: Tab;
   onTabChange: (tab: Tab) => void;
@@ -338,6 +340,7 @@ function MainContent({
   colorScheme,
   toggleColorScheme,
   passwordEnabled,
+  syncEnabled,
   snippetsEnabled,
   tab,
   onTabChange,
@@ -810,7 +813,7 @@ function MainContent({
             {storageInfo.totalEntries} clips · {formatBytes(storageInfo.bytesUsed)} used
           </Text>
           <Group gap={4}>
-            {settings.syncEnabled && settings.passwordEnabled && (
+            {syncEnabled && passwordEnabled && (
               <Tooltip label="Sync enabled">
                 <IconCloud size={12} style={{ color: 'var(--mantine-color-blue-5)' }} />
               </Tooltip>
