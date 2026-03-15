@@ -2,6 +2,8 @@
 // CopyFlow — Core Type Definitions
 // ============================================
 
+export type DetectedType = 'url' | 'email' | 'code' | 'phone' | 'color' | 'json';
+
 export interface ClipboardEntry {
   id: string;
   content: string;
@@ -12,6 +14,7 @@ export interface ClipboardEntry {
   sourceTitle?: string;
   pinned: boolean;
   folderId?: string;
+  detectedType?: DetectedType;
 }
 
 export interface Folder {
@@ -28,6 +31,7 @@ export interface Settings {
   keyboardShortcutEnabled: boolean;
   passwordEnabled: boolean;
   autoLockMinutes: number;
+  syncEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -37,6 +41,7 @@ export const DEFAULT_SETTINGS: Settings = {
   keyboardShortcutEnabled: true,
   passwordEnabled: false,
   autoLockMinutes: 0,
+  syncEnabled: false,
 };
 
 // Encrypted payload stored per-entry when encryption is enabled
@@ -54,6 +59,7 @@ export interface EncryptedEntry {
   timestamp: number;
   pinned: boolean;
   folderId?: string;
+  detectedType?: DetectedType;
   encrypted: EncryptedPayload;
 }
 
@@ -93,6 +99,28 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   snippetsEnabled: true,
 };
 
+// --- Sync ---
+
+export interface SyncedItem {
+  id: string;
+  type: 'entry' | 'snippet';
+  timestamp: number;
+  encrypted: EncryptedPayload;
+}
+
+export interface SyncManifest {
+  version: 1;
+  lastPush: number;
+  itemKeys: string[];
+}
+
+// --- Trusted domains (for paste warnings) ---
+
+export interface TrustedDomain {
+  domain: string;
+  trustedAt: number;
+}
+
 // Message types for service worker <-> offscreen/popup communication
 export type MessageType =
   | { type: 'READ_CLIPBOARD' }
@@ -106,7 +134,10 @@ export type MessageType =
   | { type: 'COPYFLOW_SNIPPETS_UPDATED' }
   | { type: 'SNIPPETS_CHANGED' }
   | { type: 'COPYFLOW_INSECURE_PASTE_WARNING'; entryContent: string }
-  | { type: 'COPYFLOW_CONFIRM_INSECURE_PASTE'; content: string };
+  | { type: 'COPYFLOW_CONFIRM_INSECURE_PASTE'; content: string }
+  | { type: 'COPYFLOW_DOMAIN_PASTE_WARNING'; entryContent: string; domain: string; isSensitive: boolean; reason?: string }
+  | { type: 'COPYFLOW_CONFIRM_DOMAIN_PASTE'; content: string; domain: string; rememberDomain: boolean }
+  | { type: 'SYNC_NOW' };
 
 export interface StorageData {
   entries: ClipboardEntry[];

@@ -35,6 +35,7 @@ import {
   IconLock,
   IconShieldLock,
   IconFolder,
+  IconCloud,
 } from '@tabler/icons-react';
 import {
   getEntries,
@@ -51,7 +52,7 @@ import {
 } from '../../lib/storage';
 import { isUnlocked } from '../../lib/session';
 import { getFeatureFlags } from '../../lib/features';
-import type { ClipboardEntry, Folder, Settings, FeatureFlags } from '../../types';
+import type { ClipboardEntry, Folder, Settings, FeatureFlags, DetectedType } from '../../types';
 import LockScreen from './LockScreen';
 import PasswordSettings from './PasswordSettings';
 import SnippetsPanel from './SnippetsPanel';
@@ -69,6 +70,7 @@ export default function App() {
   const [entries, setEntries] = useState<ClipboardEntry[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+  const [activeTypeFilter, setActiveTypeFilter] = useState<DetectedType | null>(null);
   const [search, setSearch] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [storageInfo, setStorageInfo] = useState({ bytesUsed: 0, totalEntries: 0 });
@@ -271,6 +273,8 @@ export default function App() {
       folders={folders}
       activeFolderId={activeFolderId}
       setActiveFolderId={setActiveFolderId}
+      activeTypeFilter={activeTypeFilter}
+      setActiveTypeFilter={setActiveTypeFilter}
       search={search}
       setSearch={setSearch}
       copiedId={copiedId}
@@ -298,6 +302,8 @@ interface MainContentProps {
   folders: Folder[];
   activeFolderId: string | null;
   setActiveFolderId: (id: string | null) => void;
+  activeTypeFilter: DetectedType | null;
+  setActiveTypeFilter: (t: DetectedType | null) => void;
   search: string;
   setSearch: (s: string) => void;
   copiedId: string | null;
@@ -321,6 +327,8 @@ function MainContent({
   folders,
   activeFolderId,
   setActiveFolderId,
+  activeTypeFilter,
+  setActiveTypeFilter,
   search,
   setSearch,
   copiedId,
@@ -345,10 +353,11 @@ function MainContent({
 
   const quotaPercent = storageInfo.bytesUsed / STORAGE_QUOTA_BYTES;
 
-  // Filter entries by search and active folder
+  // Filter entries by search, active folder, and type filter
   const filtered = entries
     .filter((e) => e.content.toLowerCase().includes(search.toLowerCase()))
-    .filter((e) => activeFolderId === null || e.folderId === activeFolderId);
+    .filter((e) => activeFolderId === null || e.folderId === activeFolderId)
+    .filter((e) => activeTypeFilter === null || e.detectedType === activeTypeFilter);
 
   // Split into pinned + unpinned
   const pinned = filtered.filter((e) => e.pinned);
@@ -357,10 +366,10 @@ function MainContent({
   // Flat array for keyboard indexing
   const allClips = [...pinned, ...unpinned];
 
-  // Reset focus when search or folder changes
+  // Reset focus when search, folder, or type filter changes
   useEffect(() => {
     setFocusedIndex(-1);
-  }, [search, activeFolderId]);
+  }, [search, activeFolderId, activeTypeFilter]);
 
   // Scroll focused item into view
   useEffect(() => {
@@ -690,6 +699,11 @@ function MainContent({
                 ))}
               </Group>
             )}
+            <TypeFilterBadges
+              entries={entries}
+              activeTypeFilter={activeTypeFilter}
+              setActiveTypeFilter={setActiveTypeFilter}
+            />
           </>
         )}
       </Box>
@@ -795,9 +809,16 @@ function MainContent({
           <Text size="xs" c="dimmed">
             {storageInfo.totalEntries} clips · {formatBytes(storageInfo.bytesUsed)} used
           </Text>
-          <Text size="xs" c="dimmed">
-            CopyFlow v0.2.1
-          </Text>
+          <Group gap={4}>
+            {settings.syncEnabled && settings.passwordEnabled && (
+              <Tooltip label="Sync enabled">
+                <IconCloud size={12} style={{ color: 'var(--mantine-color-blue-5)' }} />
+              </Tooltip>
+            )}
+            <Text size="xs" c="dimmed">
+              CopyFlow v0.3.0
+            </Text>
+          </Group>
         </Group>
         {quotaExceeded && (
           <Text size="xs" c="red" mt={2}>
@@ -1034,6 +1055,16 @@ function ClipItem({
               </Text>
             )
           )}
+          {entry.detectedType && (
+            <Badge
+              size="xs"
+              color={TYPE_BADGE_COLORS[entry.detectedType]}
+              variant="light"
+              style={{ cursor: 'default' }}
+            >
+              {entry.detectedType}
+            </Badge>
+          )}
           {activeFolder && (
             <Badge
               size="xs"
@@ -1138,5 +1169,72 @@ function ClipItem({
         )}
       </Group>
     </Box>
+  );
+}
+
+// ---- Type Detection Helpers ----
+
+const TYPE_BADGE_COLORS: Record<string, string> = {
+  url: 'blue',
+  email: 'green',
+  code: 'gray',
+  phone: 'teal',
+  color: 'grape',
+  json: 'orange',
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  url: 'URL',
+  email: 'Email',
+  code: 'Code',
+  phone: 'Phone',
+  color: 'Color',
+  json: 'JSON',
+};
+
+function TypeFilterBadges({
+  entries,
+  activeTypeFilter,
+  setActiveTypeFilter,
+}: {
+  entries: ClipboardEntry[];
+  activeTypeFilter: DetectedType | null;
+  setActiveTypeFilter: (t: DetectedType | null) => void;
+}) {
+  // Count entries per detected type
+  const typeCounts = new Map<string, number>();
+  for (const e of entries) {
+    if (e.detectedType) {
+      typeCounts.set(e.detectedType, (typeCounts.get(e.detectedType) || 0) + 1);
+    }
+  }
+
+  if (typeCounts.size === 0) return null;
+
+  return (
+    <Group gap={4} mt={4} style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
+      {activeTypeFilter !== null && (
+        <Badge
+          variant="light"
+          style={{ cursor: 'pointer', flexShrink: 0 }}
+          onClick={() => setActiveTypeFilter(null)}
+        >
+          All types
+        </Badge>
+      )}
+      {Array.from(typeCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([type, count]) => (
+          <Badge
+            key={type}
+            color={TYPE_BADGE_COLORS[type]}
+            variant={activeTypeFilter === type ? 'filled' : 'light'}
+            style={{ cursor: 'pointer', flexShrink: 0 }}
+            onClick={() => setActiveTypeFilter(activeTypeFilter === type ? null : type as DetectedType)}
+          >
+            {TYPE_LABELS[type]} ({count})
+          </Badge>
+        ))}
+    </Group>
   );
 }

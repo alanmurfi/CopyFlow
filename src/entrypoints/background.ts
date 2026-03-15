@@ -5,11 +5,13 @@
 // Manages context menus, auto-cleanup, and encryption lock state.
 
 import { v4 as uuidv4 } from 'uuid';
-import { addEntry, getEntries, setLastClipboard, isLastClipboard, getSettings, deleteEntries, getEncryptionMeta, isEncryptionEnabled, STORAGE_QUOTA_BYTES, STORAGE_QUOTA_WARN_THRESHOLD } from '../lib/storage';
+import { addEntry, getEntries, setLastClipboard, isLastClipboard, getSettings, deleteEntries, getEncryptionMeta, isEncryptionEnabled, isDomainTrusted, addTrustedDomain, STORAGE_QUOTA_BYTES, STORAGE_QUOTA_WARN_THRESHOLD } from '../lib/storage';
 import { deriveCryptoKey, verifyPassword, saltFromBase64 } from '../lib/crypto';
 import { storeSessionKey, clearSessionKey, isUnlocked } from '../lib/session';
 import { getSnippetShortcuts, getSnippets, resolveTemplate } from '../lib/snippets';
 import { isFeatureEnabled } from '../lib/features';
+import { isSensitiveContent } from '../lib/sensitive';
+import { pushToSync, pullFromSync, isSyncAvailable } from '../lib/sync';
 import type { ClipboardEntry } from '../types';
 
 // ==========================================
@@ -353,6 +355,32 @@ export default defineBackground(() => {
         return;
       }
 
+      // HTTPS domain check: warn on unfamiliar domains or sensitive content
+      if (url.startsWith('https://')) {
+        try {
+          const hostname = new URL(url).hostname;
+          const trusted = await isDomainTrusted(hostname);
+          const sensitiveCheck = isSensitiveContent(entry.content);
+
+          // Always warn if content is sensitive (even on trusted domains)
+          // Warn on untrusted domains even for non-sensitive content
+          if (sensitiveCheck.sensitive || !trusted) {
+            chrome.tabs.sendMessage(tab.id, {
+              type: 'COPYFLOW_DOMAIN_PASTE_WARNING',
+              entryContent: entry.content,
+              domain: hostname,
+              isSensitive: sensitiveCheck.sensitive,
+              reason: sensitiveCheck.reason,
+            }).catch(() => {
+              console.debug('CopyFlow: Content script not available on this tab');
+            });
+            return;
+          }
+        } catch {
+          // URL parsing failed — proceed with paste
+        }
+      }
+
       // Write text to clipboard first, then trigger native paste in the page.
       // This works with all element types (input, textarea, contentEditable)
       // and all frameworks (React, Vue, Angular, etc.) via the browser's native
@@ -402,6 +430,47 @@ export default defineBackground(() => {
     pollingTimer = setInterval(pollClipboard, POLL_INTERVAL);
     setTimeout(pollClipboard, 500);
   }
+
+  // ---- Sync helpers ----
+
+  let syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function debouncedSyncPush(): void {
+    if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = setTimeout(async () => {
+      syncDebounceTimer = null;
+      try {
+        const result = await pushToSync();
+        if (result.pushed > 0) {
+          console.debug(`CopyFlow: Synced ${result.pushed} items`);
+        }
+      } catch (err) {
+        console.debug('CopyFlow: Sync push failed:', err);
+      }
+    }, 5000); // 5 second debounce
+  }
+
+  // Pull from sync on startup (merge remote changes)
+  (async () => {
+    try {
+      if (await isSyncAvailable()) {
+        const pulled = await pullFromSync();
+        if (pulled.entries.length > 0 || pulled.snippets.length > 0) {
+          // Merge pulled entries — add missing pinned entries
+          const existing = await getEntries();
+          const existingIds = new Set(existing.map((e) => e.id));
+          for (const entry of pulled.entries) {
+            if (!existingIds.has(entry.id)) {
+              await addEntry(entry);
+            }
+          }
+          console.debug(`CopyFlow: Pulled ${pulled.entries.length} entries, ${pulled.snippets.length} snippets from sync`);
+        }
+      }
+    } catch (err) {
+      console.debug('CopyFlow: Sync pull on startup failed:', err);
+    }
+  })();
 
   // ---- Snippet helpers ----
 
@@ -553,6 +622,32 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (message.type === 'COPYFLOW_CONFIRM_DOMAIN_PASTE') {
+      // User confirmed paste on HTTPS domain (optionally remembering the domain)
+      (async () => {
+        try {
+          if (typeof message.content !== 'string' || typeof message.domain !== 'string') {
+            sendResponse({ success: false });
+            return;
+          }
+          // Remember domain if user checked the box
+          if (message.rememberDomain) {
+            await addTrustedDomain(message.domain);
+          }
+          await ensureOffscreen();
+          await sendToOffscreen({ type: 'WRITE_CLIPBOARD', text: message.content });
+          const tabId = sender.tab?.id;
+          if (tabId) {
+            chrome.tabs.sendMessage(tabId, { type: 'COPYFLOW_TRIGGER_PASTE' }).catch(() => {});
+          }
+          sendResponse({ success: true });
+        } catch {
+          sendResponse({ success: false });
+        }
+      })();
+      return true;
+    }
+
     return false;
   });
 
@@ -592,6 +687,19 @@ export default defineBackground(() => {
 
     if (message.type === 'SNIPPETS_CHANGED') {
       broadcastSnippetsUpdated().then(() => sendResponse({ success: true }));
+      return true;
+    }
+
+    if (message.type === 'SYNC_NOW') {
+      (async () => {
+        try {
+          const result = await pushToSync();
+          sendResponse({ success: true, ...result });
+        } catch (err) {
+          console.debug('CopyFlow: Manual sync failed:', err);
+          sendResponse({ success: false, error: 'Sync failed' });
+        }
+      })();
       return true;
     }
 
@@ -704,6 +812,11 @@ export default defineBackground(() => {
     if (changes['copyflow_entries']) {
       rebuildContextMenus();
       updateQuotaBadge();
+      // Trigger sync push when entries change (pin/unpin, add, delete)
+      debouncedSyncPush();
+    }
+    if (changes['copyflow_snippets']) {
+      debouncedSyncPush();
     }
     if (changes['copyflow_settings']) {
       // Re-arm the auto-lock timer so the new autoLockMinutes value takes effect immediately

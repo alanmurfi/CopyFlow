@@ -2,10 +2,11 @@
 // CopyFlow — Chrome Storage Wrapper
 // ============================================
 
-import type { ClipboardEntry, Folder, Settings, EncryptedEntry, EncryptionMeta } from '../types';
+import type { ClipboardEntry, Folder, Settings, EncryptedEntry, EncryptionMeta, TrustedDomain } from '../types';
 import { DEFAULT_SETTINGS } from '../types';
 import { encryptPayload, decryptPayload, hashContent } from './crypto';
 import { getSessionKey, isUnlocked } from './session';
+import { detectContentType } from './detect';
 
 const STORAGE_KEYS = {
   entries: 'copyflow_entries',
@@ -14,6 +15,7 @@ const STORAGE_KEYS = {
   lastClipboard: 'copyflow_last_clipboard',
   encryptionMeta: 'copyflow_encryption_meta',
   quotaExceeded: 'copyflow_quota_exceeded',
+  trustedDomains: 'copyflow_trusted_domains',
 } as const;
 
 // --- Constants ---
@@ -79,6 +81,7 @@ async function encryptEntry(entry: ClipboardEntry, key: CryptoKey): Promise<Encr
     timestamp: entry.timestamp,
     pinned: entry.pinned,
     folderId: entry.folderId,
+    detectedType: entry.detectedType,
     encrypted: { iv, ciphertext },
   };
 }
@@ -93,6 +96,7 @@ async function decryptEntry(entry: EncryptedEntry, key: CryptoKey): Promise<Clip
     timestamp: entry.timestamp,
     pinned: entry.pinned,
     folderId: entry.folderId,
+    detectedType: entry.detectedType,
     content: sensitive.content,
     imageDataUrl: sensitive.imageDataUrl,
     sourceUrl: sensitive.sourceUrl,
@@ -175,6 +179,11 @@ export function addEntry(entry: ClipboardEntry): Promise<void> {
       // Locked — cannot encrypt. Drop the entry silently.
       console.debug('CopyFlow: Locked, skipping new entry');
       return;
+    }
+
+    // Auto-detect content type for text entries
+    if (entry.type === 'text' && !entry.detectedType) {
+      entry = { ...entry, detectedType: detectContentType(entry.content) };
     }
 
     // Read existing entries (decrypted if encrypted)
@@ -414,6 +423,32 @@ export async function getStorageUsage(): Promise<{ bytesUsed: number; totalEntri
   return { bytesUsed, totalEntries: raw.length };
 }
 
+// --- Trusted Domains ---
+
+export async function getTrustedDomains(): Promise<TrustedDomain[]> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.trustedDomains);
+  return result[STORAGE_KEYS.trustedDomains] ?? [];
+}
+
+export async function addTrustedDomain(domain: string): Promise<void> {
+  const domains = await getTrustedDomains();
+  // Don't add duplicates
+  if (domains.some((d) => d.domain === domain)) return;
+  domains.push({ domain, trustedAt: Date.now() });
+  await chrome.storage.local.set({ [STORAGE_KEYS.trustedDomains]: domains });
+}
+
+export async function isDomainTrusted(domain: string): Promise<boolean> {
+  const domains = await getTrustedDomains();
+  return domains.some((d) => d.domain === domain);
+}
+
+export async function removeTrustedDomain(domain: string): Promise<void> {
+  const domains = await getTrustedDomains();
+  const filtered = domains.filter((d) => d.domain !== domain);
+  await chrome.storage.local.set({ [STORAGE_KEYS.trustedDomains]: filtered });
+}
+
 // --- Export / Import ---
 
 export async function exportData(): Promise<string> {
@@ -437,7 +472,8 @@ function isValidEntry(e: unknown): e is ClipboardEntry {
     (entry.imageDataUrl === undefined || entry.imageDataUrl === null ||
       (typeof entry.imageDataUrl === 'string' && isValidImageDataUrl(entry.imageDataUrl))) &&
     (entry.sourceUrl === undefined || entry.sourceUrl === null || typeof entry.sourceUrl === 'string') &&
-    (entry.sourceTitle === undefined || entry.sourceTitle === null || typeof entry.sourceTitle === 'string')
+    (entry.sourceTitle === undefined || entry.sourceTitle === null || typeof entry.sourceTitle === 'string') &&
+    (entry.detectedType === undefined || ['url', 'email', 'code', 'phone', 'color', 'json'].includes(entry.detectedType as string))
   );
 }
 
@@ -476,6 +512,10 @@ export async function importData(json: string): Promise<{ entriesImported: numbe
   for (const entry of validEntries) {
     if (entry.folderId && !folderIds.has(entry.folderId)) {
       entry.folderId = undefined;
+    }
+    // Backfill detectedType for imported entries that don't have it
+    if (entry.type === 'text' && !entry.detectedType) {
+      entry.detectedType = detectContentType(entry.content);
     }
   }
 

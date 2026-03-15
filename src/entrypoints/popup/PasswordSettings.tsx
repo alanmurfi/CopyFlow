@@ -2,7 +2,7 @@
 // CopyFlow — Password Settings Component
 // ============================================
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Stack,
   Text,
@@ -11,8 +11,10 @@ import {
   Group,
   Divider,
   NumberInput,
+  Switch,
+  Alert,
 } from '@mantine/core';
-import { IconArrowLeft, IconDownload } from '@tabler/icons-react';
+import { IconArrowLeft, IconDownload, IconCloud, IconCloudOff } from '@tabler/icons-react';
 import {
   getSettings,
   updateSettings,
@@ -34,6 +36,7 @@ import {
 import { storeSessionKey, clearSessionKey } from '../../lib/session';
 import { getEncryptionMeta } from '../../lib/storage';
 import { migrateSnippetsToEncrypted, migrateSnippetsToPlaintext, reencryptSnippets } from '../../lib/snippets';
+import { getLastSyncTime, clearSync } from '../../lib/sync';
 import type { EncryptionMeta } from '../../types';
 
 interface PasswordSettingsProps {
@@ -58,6 +61,41 @@ export default function PasswordSettings({
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [autoLock, setAutoLock] = useState<number>(autoLockMinutes);
+  const [syncEnabled, setSyncEnabled] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  useEffect(() => {
+    if (passwordEnabled) {
+      getSettings().then((s) => setSyncEnabled(s.syncEnabled));
+      getLastSyncTime().then((t) => setLastSyncTime(t));
+    }
+  }, [passwordEnabled]);
+
+  async function handleSyncToggle(enabled: boolean) {
+    setSyncEnabled(enabled);
+    await updateSettings({ syncEnabled: enabled });
+    if (!enabled) {
+      await clearSync();
+      setLastSyncTime(null);
+    }
+    onStateChange();
+  }
+
+  async function handleSyncNow() {
+    setSyncing(true);
+    try {
+      await new Promise<void>((resolve) => {
+        chrome.runtime.sendMessage({ type: 'SYNC_NOW' }, () => resolve());
+      });
+      const t = await getLastSyncTime();
+      setLastSyncTime(t);
+    } catch {
+      // Sync failed silently
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function handleExportBackup() {
     try {
@@ -312,6 +350,43 @@ export default function PasswordSettings({
             max={1440}
             size="xs"
           />
+
+          <Divider label="Chrome Sync" labelPosition="left" />
+
+          <Switch
+            label="Sync pinned clips & snippets"
+            description="Encrypted sync across devices (same password required)"
+            checked={syncEnabled}
+            onChange={(e) => handleSyncToggle(e.currentTarget.checked)}
+            size="xs"
+          />
+
+          {syncEnabled && (
+            <>
+              <Alert variant="light" color="yellow" icon={<IconCloud size={16} />} p="xs">
+                <Text size="xs">
+                  All synced data is encrypted with your password. Use the same password on all devices.
+                </Text>
+              </Alert>
+
+              <Group gap="xs">
+                <Button
+                  size="xs"
+                  variant="light"
+                  leftSection={<IconCloud size={14} />}
+                  onClick={handleSyncNow}
+                  loading={syncing}
+                >
+                  Sync Now
+                </Button>
+                <Text size="xs" c="dimmed">
+                  {lastSyncTime
+                    ? `Last sync: ${new Date(lastSyncTime).toLocaleTimeString()}`
+                    : 'Not synced yet'}
+                </Text>
+              </Group>
+            </>
+          )}
 
           <Divider label="Disable encryption" labelPosition="left" />
 

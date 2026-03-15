@@ -342,6 +342,258 @@ export default defineContentScript({
       }, 10_000);
     }
 
+    // ==========================================
+    // Domain Paste Warning (HTTPS)
+    // ==========================================
+    // Warns when pasting to unfamiliar HTTPS domains or when content is sensitive.
+
+    let domainWarning: HTMLDivElement | null = null;
+
+    function showDomainPasteWarning(content: string, domain: string, isSensitive: boolean, reason?: string) {
+      // Remove existing warning if any
+      if (domainWarning) {
+        domainWarning.remove();
+        domainWarning = null;
+      }
+
+      domainWarning = document.createElement('div');
+      domainWarning.id = 'copyflow-domain-warning';
+
+      const shadow = domainWarning.attachShadow({ mode: 'closed' });
+
+      const borderColor = isSensitive ? '#e03131' : '#228be6';
+      const titleColor = isSensitive ? '#e03131' : '#228be6';
+      const btnColor = isSensitive ? '#e03131' : '#228be6';
+      const btnHover = isSensitive ? '#c92a2a' : '#1971c2';
+
+      const style = document.createElement('style');
+      style.textContent = `
+        :host {
+          all: initial;
+        }
+        .cf-warn {
+          position: fixed;
+          bottom: 24px;
+          right: 24px;
+          z-index: 2147483647;
+          padding: 14px 18px;
+          background: #1a1b1e;
+          color: #fff;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 13px;
+          line-height: 1.5;
+          border-radius: 12px;
+          border: 1px solid ${borderColor};
+          box-shadow: 0 4px 24px rgba(0,0,0,0.35);
+          max-width: 360px;
+          opacity: 0;
+          transform: translateY(8px);
+          animation: cf-slide-in 0.2s ease forwards;
+        }
+        .cf-warn.cf-hide {
+          animation: cf-slide-out 0.2s ease forwards;
+        }
+        .cf-warn-title {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          color: ${titleColor};
+          font-weight: 600;
+          font-size: 13px;
+          margin-bottom: 4px;
+        }
+        .cf-warn-domain {
+          color: #c1c2c5;
+          font-size: 12px;
+          margin-bottom: 2px;
+        }
+        .cf-warn-reason {
+          color: #fa5252;
+          font-size: 11px;
+          font-weight: 500;
+          margin-bottom: 6px;
+        }
+        .cf-warn-preview {
+          color: #8b8d91;
+          font-size: 12px;
+          margin-bottom: 10px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .cf-warn-remember {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 10px;
+          font-size: 12px;
+          color: #c1c2c5;
+          cursor: pointer;
+        }
+        .cf-warn-remember input {
+          accent-color: ${btnColor};
+          cursor: pointer;
+        }
+        .cf-warn-buttons {
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+        }
+        .cf-btn {
+          border: none;
+          border-radius: 6px;
+          padding: 6px 14px;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          font-family: inherit;
+        }
+        .cf-btn-cancel {
+          background: #373a40;
+          color: #c1c2c5;
+        }
+        .cf-btn-cancel:hover {
+          background: #495057;
+        }
+        .cf-btn-paste {
+          background: ${btnColor};
+          color: #fff;
+        }
+        .cf-btn-paste:hover {
+          background: ${btnHover};
+        }
+        @keyframes cf-slide-in {
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        @keyframes cf-slide-out {
+          from {
+            opacity: 1;
+            transform: translateY(0);
+          }
+          to {
+            opacity: 0;
+            transform: translateY(8px);
+          }
+        }
+      `;
+
+      const container = document.createElement('div');
+      container.className = 'cf-warn';
+
+      // Title row with icon
+      const titleRow = document.createElement('div');
+      titleRow.className = 'cf-warn-title';
+
+      const shield = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      shield.setAttribute('width', '16');
+      shield.setAttribute('height', '16');
+      shield.setAttribute('viewBox', '0 0 24 24');
+      shield.setAttribute('fill', 'none');
+      shield.setAttribute('stroke', titleColor);
+      shield.setAttribute('stroke-width', '2');
+      shield.setAttribute('stroke-linecap', 'round');
+      shield.setAttribute('stroke-linejoin', 'round');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z');
+      shield.appendChild(path);
+      if (isSensitive) {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', '12'); line.setAttribute('y1', '8');
+        line.setAttribute('x2', '12'); line.setAttribute('y2', '12');
+        shield.appendChild(line);
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        dot.setAttribute('x1', '12'); dot.setAttribute('y1', '16');
+        dot.setAttribute('x2', '12.01'); dot.setAttribute('y2', '16');
+        shield.appendChild(dot);
+      }
+
+      const titleText = isSensitive ? 'Sensitive content detected' : 'Unfamiliar site';
+      titleRow.appendChild(shield);
+      titleRow.appendChild(document.createTextNode(titleText));
+
+      container.appendChild(titleRow);
+
+      // Domain info
+      const domainInfo = document.createElement('div');
+      domainInfo.className = 'cf-warn-domain';
+      domainInfo.textContent = `Pasting to ${domain}`;
+      container.appendChild(domainInfo);
+
+      // Sensitive reason
+      if (isSensitive && reason) {
+        const reasonEl = document.createElement('div');
+        reasonEl.className = 'cf-warn-reason';
+        reasonEl.textContent = `Contains: ${reason}`;
+        container.appendChild(reasonEl);
+      }
+
+      // Preview
+      const preview = document.createElement('div');
+      preview.className = 'cf-warn-preview';
+      preview.textContent = truncate(content, 50);
+      container.appendChild(preview);
+
+      // Remember checkbox (only for non-sensitive — sensitive always warns)
+      let rememberCheckbox: HTMLInputElement | null = null;
+      if (!isSensitive) {
+        const rememberLabel = document.createElement('label');
+        rememberLabel.className = 'cf-warn-remember';
+        rememberCheckbox = document.createElement('input');
+        rememberCheckbox.type = 'checkbox';
+        rememberLabel.appendChild(rememberCheckbox);
+        rememberLabel.appendChild(document.createTextNode('Remember this site'));
+        container.appendChild(rememberLabel);
+      }
+
+      // Buttons
+      const buttons = document.createElement('div');
+      buttons.className = 'cf-warn-buttons';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'cf-btn cf-btn-cancel';
+      cancelBtn.textContent = 'Cancel';
+
+      const pasteBtn = document.createElement('button');
+      pasteBtn.className = 'cf-btn cf-btn-paste';
+      pasteBtn.textContent = 'Paste anyway';
+
+      buttons.appendChild(cancelBtn);
+      buttons.appendChild(pasteBtn);
+      container.appendChild(buttons);
+
+      shadow.appendChild(style);
+      shadow.appendChild(container);
+      document.documentElement.appendChild(domainWarning);
+
+      function dismiss() {
+        container.classList.add('cf-hide');
+        setTimeout(() => {
+          domainWarning?.remove();
+          domainWarning = null;
+        }, 200);
+      }
+
+      cancelBtn.addEventListener('click', dismiss);
+
+      pasteBtn.addEventListener('click', () => {
+        dismiss();
+        chrome.runtime.sendMessage({
+          type: 'COPYFLOW_CONFIRM_DOMAIN_PASTE',
+          content,
+          domain,
+          rememberDomain: rememberCheckbox?.checked ?? false,
+        });
+      });
+
+      // Auto-dismiss after 15 seconds (default: don't paste)
+      setTimeout(() => {
+        if (domainWarning) dismiss();
+      }, 15_000);
+    }
+
     // Listen for native copy events (text + immediate image check)
     document.addEventListener('copy', () => {
       const selection = window.getSelection()?.toString();
@@ -434,6 +686,13 @@ export default defineContentScript({
       if (message.type === 'COPYFLOW_INSECURE_PASTE_WARNING') {
         if (typeof message.entryContent === 'string') {
           showInsecurePasteWarning(message.entryContent);
+        }
+        sendResponse({ success: true });
+      }
+
+      if (message.type === 'COPYFLOW_DOMAIN_PASTE_WARNING') {
+        if (typeof message.entryContent === 'string' && typeof message.domain === 'string') {
+          showDomainPasteWarning(message.entryContent, message.domain, message.isSensitive ?? false, message.reason);
         }
         sendResponse({ success: true });
       }
